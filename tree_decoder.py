@@ -1,9 +1,7 @@
 import tensorflow as tf
-from tree.definition import TreeDefinition, Tree, TrainingTree, NodeDefinition
-from tree.batch import BatchOfTreesForDecoding
+from definition import TreeDefinition, Tree, TrainingTree, NodeDefinition
+from batch import BatchOfTreesForDecoding
 import typing as T
-from utils import tf_random_choice_idx
-from benchmark import Measure
 import itertools
 
 
@@ -396,172 +394,171 @@ class Decoder(tf.keras.Model):
             if len(ops) == 0:
                 break
 
-            with Measure('inp', Decoder.times):
-                # build the input form the node embeddings
-                inp = tf.gather(batch['embs'], [o.meta['node_numb'] for o in ops])
-                batch_idxs = list(map(lambda x: x.meta['batch_idx'], ops))
+            # build the input form the node embeddings
+            inp = tf.gather(batch['embs'], [o.meta['node_numb'] for o in ops])
+            batch_idxs = list(map(lambda x: x.meta['batch_idx'], ops))
 
-                if self.attention:
-                    all_new_inp = []
-                    for i, o in zip(itertools.count(), ops):
-                        b = all_encoding_embedding[
-                            o.meta['batch_idx'] % len(all_encoding_embedding)]  # TODO really hardcoded
-                        with_emb = tf.concat([b, inp[i:i+1]], axis=0)
-                        concated = tf.concat([with_emb, tf.tile(tf.reshape(inp[i], [1, -1]), [with_emb.shape[0], 1])], axis=1)
-                        gates = tf.nn.softmax(self.attention_f(concated), axis=0)
-                        all_new_inp.append(tf.reduce_sum(concated * gates, axis=0))
-                    inp = tf.stack(all_new_inp)
+            if self.attention:
+                all_new_inp = []
+                for i, o in zip(itertools.count(), ops):
+                    b = all_encoding_embedding[
+                        o.meta['batch_idx'] % len(all_encoding_embedding)]  # TODO really hardcoded
+                    with_emb = tf.concat([b, inp[i:i+1]], axis=0)
+                    concated = tf.concat([with_emb, tf.tile(tf.reshape(inp[i], [1, -1]), [with_emb.shape[0], 1])], axis=1)
+                    gates = tf.nn.softmax(self.attention_f(concated), axis=0)
+                    all_new_inp.append(tf.reduce_sum(concated * gates, axis=0))
+                inp = tf.stack(all_new_inp)
 
-                # add to the input the 'augmented info'
-                if augment_fn is not None:
-                    inp = augment_fn(inp, batch_idxs)
+            # add to the input the 'augmented info'
+            if augment_fn is not None:
+                inp = augment_fn(inp, batch_idxs)
 
-                # add to the input  the root embedding
-                if self.take_root_along:
-                    root_embs = tf.gather(batch.root_embeddings, batch_idxs)
-                    inp = tf.concat([inp, root_embs], axis=1)
+            # add to the input  the root embedding
+            if self.take_root_along:
+                root_embs = tf.gather(batch.root_embeddings, batch_idxs)
+                inp = tf.concat([inp, root_embs], axis=1)
 
             # add to the input informations about the node type TODO not sure this is needed
             # inp = tf.concat([inp, tf.tile(tf.one_hot(self.all_types_idx[node_type.id], len(self.all_types)), [len(ops), 1])])
 
             # compute node value, if present
             if node_type.value_type is not None:
-                with Measure('val', Decoder.times):
-                    # ops_to_compute_mask = tf.convert_to_tensor(list(map(lambda x: x.value is None, ops)))
-                    # not avoid recomputing recursive nodes - looks to be more efficient
 
-                    infl = getattr(self, 'value_'+node_type.id)
-                    vals = infl.compiled_call(inp)
+                # ops_to_compute_mask = tf.convert_to_tensor(list(map(lambda x: x.value is None, ops)))
+                # not avoid recomputing recursive nodes - looks to be more efficient
 
-                    if TR:
-                        new_values = batch.scatter_init_values(node_type, [o.meta['target'].meta['value_numb'] for o in ops], vals)
-                    else:
-                        new_values = batch.add_values(node_type, vals)
+                infl = getattr(self, 'value_'+node_type.id)
+                vals = infl.compiled_call(inp)
 
-                    for o, v in zip(ops, new_values):
-                        o.value = v
+                if TR:
+                    new_values = batch.scatter_init_values(node_type, [o.meta['target'].meta['value_numb'] for o in ops], vals)
+                else:
+                    new_values = batch.add_values(node_type, vals)
 
-                    inp = tf.concat([inp, vals], axis=-1)
+                for o, v in zip(ops, new_values):
+                    o.value = v
+
+                inp = tf.concat([inp, vals], axis=-1)
 
             # based on the node type expand the frontier of the computed tree
             if type(node_type.arity) == node_type.FixedArity:
-                with Measure('fix', Decoder.times):
-                    if node_type.arity.value == 0:  # leaf
-                        for o in ops:
-                            o.meta = {}     # value already computed we can release the memory
+
+                if node_type.arity.value == 0:  # leaf
+                    for o in ops:
+                        o.meta = {}     # value already computed we can release the memory
+                else:
+                    # retrieve distribution and inflater
+                    dst = getattr(self, 'dist_' + node_type.id)
+                    inf = getattr(self, 'infl_' + node_type.id)
+
+                    all_children_distribs = dst.compiled_call(inp)  # [batch * arity, types]
+                    if TR:
+                        node_idx = [self.all_types_idx[c.node_type_id] for o in ops for c in o.meta["target"].children]
                     else:
-                        # retrieve distribution and inflater
-                        dst = getattr(self, 'dist_' + node_type.id)
-                        inf = getattr(self, 'infl_' + node_type.id)
+                        # node_idx = list(tf_random_choice_idx(all_children_distribs).numpy())
+                        node_idx = list(tf.argmax(all_children_distribs, axis=1))
 
-                        all_children_distribs = dst.compiled_call(inp)  # [batch * arity, types]
-                        if TR:
-                            node_idx = [self.all_types_idx[c.node_type_id] for o in ops for c in o.meta["target"].children]
-                        else:
-                            # node_idx = list(tf_random_choice_idx(all_children_distribs).numpy())
-                            node_idx = list(tf.argmax(all_children_distribs, axis=1))
+                    # adding info on the sampled children type before generating their embeddings
+                    oh_distrib_ = tf.one_hot(node_idx, len(self.all_types)+1)
+                    oh_distrib = tf.reshape(oh_distrib_, tf.cast([len(node_idx) / node_type.arity.value, -1], tf.int32))
+                    inp = tf.concat([inp, oh_distrib], axis=-1)
 
-                        # adding info on the sampled children type before generating their embeddings
-                        oh_distrib_ = tf.one_hot(node_idx, len(self.all_types)+1)
-                        oh_distrib = tf.reshape(oh_distrib_, tf.cast([len(node_idx) / node_type.arity.value, -1], tf.int32))
-                        inp = tf.concat([inp, oh_distrib], axis=-1)
+                    all_embeddings = inf.compiled_call(inp) # [batch, arity * embedding_size]
+                    all_embeddings = tf.reshape(all_embeddings, [-1, self.embedding_size])
 
-                        all_embeddings = inf.compiled_call(inp) # [batch, arity * embedding_size]
-                        all_embeddings = tf.reshape(all_embeddings, [-1, self.embedding_size])
+                    if TR:
+                        batch.scatter_update('embs', [c.meta['node_numb'] for o in ops for c in o.meta['target'].children], all_embeddings)
+                        batch.stack_to('distribs', tf.pad(all_children_distribs, [[0, 0], [0, 1]]))
+                        batch.stack_to('distribs_gt', oh_distrib_)
+                    else:
+                        new_indexes = batch.add_rows('embs', all_embeddings)
 
-                        if TR:
-                            batch.scatter_update('embs', [c.meta['node_numb'] for o in ops for c in o.meta['target'].children], all_embeddings)
-                            batch.stack_to('distribs', tf.pad(all_children_distribs, [[0, 0], [0, 1]]))
-                            batch.stack_to('distribs_gt', oh_distrib_)
-                        else:
-                            new_indexes = batch.add_rows('embs', all_embeddings)
+                    i = 0
+                    j = 0
+                    for o in ops:
+                        for c in range(node_type.arity.value):
+                            c_type = self.all_types[node_idx[i]]
+                            t = TrainingTree(c_type.id, meta={"depth": o.meta["depth"] + 1, "batch_idx": o.meta["batch_idx"]})
 
-                        i = 0
-                        j = 0
-                        for o in ops:
-                            for c in range(node_type.arity.value):
-                                c_type = self.all_types[node_idx[i]]
-                                t = TrainingTree(c_type.id, meta={"depth": o.meta["depth"] + 1, "batch_idx": o.meta["batch_idx"]})
+                            if TR:
+                                t.meta['target'] = o.meta['target'].children[c]
+                                t.meta['node_numb'] = o.meta['target'].children[c].meta['node_numb']
+                                t.tr_gt_value = o.meta["target"].children[c].value
 
-                                if TR:
-                                    t.meta['target'] = o.meta['target'].children[c]
-                                    t.meta['node_numb'] = o.meta['target'].children[c].meta['node_numb']
-                                    t.tr_gt_value = o.meta["target"].children[c].value
+                                if len(o.meta['target'].children[c].children) > self.max_arity:
+                                    raise ValueError("Maximum Arity Exceeded " + str(
+                                        len(o.meta['target'].children[c].children)) + ' > ' + str(self.max_arity))
+                            else:
+                                t.meta['node_numb'] = new_indexes[i]
 
-                                    if len(o.meta['target'].children[c].children) > self.max_arity:
-                                        raise ValueError("Maximum Arity Exceeded " + str(
-                                            len(o.meta['target'].children[c].children)) + ' > ' + str(self.max_arity))
+                                if node_count[o.meta['batch_idx']] > self.max_node_count or o.meta["depth"] + 1 > self.max_depth:
+                                    t.node_type_id = "TRUNCATED"
+                                    # tf.logging.warn("Truncated tree. Node count of {0} [max {1}], Depth of {2} [max{3}]".format(node_count[o.meta['batch_idx']], self.max_node_count,o.meta["depth"] + 1, self.max_depth))
                                 else:
-                                    t.meta['node_numb'] = new_indexes[i]
+                                    node_count[o.meta['batch_idx']] += 1
 
-                                    if node_count[o.meta['batch_idx']] > self.max_node_count or o.meta["depth"] + 1 > self.max_depth:
-                                        t.node_type_id = "TRUNCATED"
-                                        # tf.logging.warn("Truncated tree. Node count of {0} [max {1}], Depth of {2} [max{3}]".format(node_count[o.meta['batch_idx']], self.max_node_count,o.meta["depth"] + 1, self.max_depth))
-                                    else:
-                                        node_count[o.meta['batch_idx']] += 1
+                            # make the tree grows
+                            # o.children.append(t)  makes the debugger crash :\
+                            # RecursionError: maximum recursion depth exceeded while calling a Python object
+                            # this other variant works :/
+                            o.children = o.children + [t]
 
-                                # make the tree grows
-                                # o.children.append(t)  makes the debugger crash :\
-                                # RecursionError: maximum recursion depth exceeded while calling a Python object
-                                # this other variant works :/
-                                o.children = o.children + [t]
+                            if t.node_type_id != "TRUNCATED":
+                                all_ops[t.node_type_id].append(t)
 
-                                if t.node_type_id != "TRUNCATED":
-                                    all_ops[t.node_type_id].append(t)
-
-                                i += 1
-                            j += 1
-                            o.meta = {}  # release memory
+                            i += 1
+                        j += 1
+                        o.meta = {}  # release memory
 
             elif type(node_type.arity) == NodeDefinition.VariableArity and not self.use_flat_strategy:
-                with Measure('var', Decoder.times):
-                    dst = getattr(self, 'dist_' + node_type.id)
-                    infl = getattr(self, 'infl_' + node_type.id)
 
-                    distribs = dst.compiled_call(inp)
-                    no_child_idx = len(self.all_types)  # special idx to stop the children generations
+                dst = getattr(self, 'dist_' + node_type.id)
+                infl = getattr(self, 'infl_' + node_type.id)
 
+                distribs = dst.compiled_call(inp)
+                no_child_idx = len(self.all_types)  # special idx to stop the children generations
+
+                if TR:
+                    node_idx = [
+                        self.all_types_idx[o.meta['target'].children[len(o.children)].node_type_id]
+                            if len(o.children) < len(o.meta['target'].children)
+                            else no_child_idx
+                        for o in ops]
+                else:
+                    # node_idx = list(tf_random_choice_idx(distribs).numpy())
+                    node_idx = list(tf.argmax(distribs, axis=1))
+
+                distribs_oh = tf.one_hot(node_idx, len(self.all_types) + 1)
+
+                if TR:
+                    batch.stack_to('distribs', distribs)
+                    batch.stack_to('distribs_gt', distribs_oh)
+
+                # avoid computing those exceeding maximum arity
+                no_child_mask = tf.equal(node_idx, no_child_idx)
+                truncated_mask = [n != no_child_idx and len(o.children) == self.max_arity for n, o in zip(node_idx, ops)]
+                mask = tf.logical_not(tf.logical_or(no_child_mask, truncated_mask))
+
+                inp = tf.boolean_mask(inp, mask, axis=0)   # remove terminated computations
+
+                if inp.shape[0].value > 0:  # otherwise means no more children have to be generated
+
+                    inp = tf.concat([inp, tf.boolean_mask(distribs_oh, mask, axis=0)], axis=1)
+                    embs = infl.compiled_call(inp)    # compute the new embedding
+
+                    # perform all the split at once is much more efficient then having multiple slicing
+                    child, new_parent = tf.split(embs, 2, axis=1)
+
+                    # TODO some are actually not useful (those for which the computation is finished)
                     if TR:
-                        node_idx = [
-                            self.all_types_idx[o.meta['target'].children[len(o.children)].node_type_id]
-                                if len(o.children) < len(o.meta['target'].children)
-                                else no_child_idx
-                            for o in ops]
+                        batch.scatter_update('embs', [o.meta['target'].meta['node_numb'] for o, b in zip(ops, mask) if b], new_parent)
+                        batch.scatter_update('embs', [o.meta['target'].children[len(o.children)].meta['node_numb'] for o, b in zip(ops, mask) if b ], child)
                     else:
-                        # node_idx = list(tf_random_choice_idx(distribs).numpy())
-                        node_idx = list(tf.argmax(distribs, axis=1))
+                        batch.scatter_update('embs',
+                                             [o.meta['node_numb'] for o, b in zip(ops, mask) if b],
+                                             new_parent)
 
-                    distribs_oh = tf.one_hot(node_idx, len(self.all_types) + 1)
-
-                    if TR:
-                        batch.stack_to('distribs', distribs)
-                        batch.stack_to('distribs_gt', distribs_oh)
-
-                    # avoid computing those exceeding maximum arity
-                    no_child_mask = tf.equal(node_idx, no_child_idx)
-                    truncated_mask = [n != no_child_idx and len(o.children) == self.max_arity for n, o in zip(node_idx, ops)]
-                    mask = tf.logical_not(tf.logical_or(no_child_mask, truncated_mask))
-
-                    inp = tf.boolean_mask(inp, mask, axis=0)   # remove terminated computations
-
-                    if inp.shape[0].value > 0:  # otherwise means no more children have to be generated
-
-                        inp = tf.concat([inp, tf.boolean_mask(distribs_oh, mask, axis=0)], axis=1)
-                        embs = infl.compiled_call(inp)    # compute the new embedding
-
-                        # perform all the split at once is much more efficient then having multiple slicing
-                        child, new_parent = tf.split(embs, 2, axis=1)
-
-                        # TODO some are actually not useful (those for which the computation is finished)
-                        if TR:
-                            batch.scatter_update('embs', [o.meta['target'].meta['node_numb'] for o, b in zip(ops, mask) if b], new_parent)
-                            batch.scatter_update('embs', [o.meta['target'].children[len(o.children)].meta['node_numb'] for o, b in zip(ops, mask) if b ], child)
-                        else:
-                            batch.scatter_update('embs',
-                                                 [o.meta['node_numb'] for o, b in zip(ops, mask) if b],
-                                                 new_parent)
-
-                            new_indeces=batch.add_rows('embs', child)
+                        new_indeces=batch.add_rows('embs', child)
 
                     res_idx = 0
                     for o, i, n in zip(ops, node_idx, range(len(ops))):
@@ -600,108 +597,108 @@ class Decoder(tf.keras.Model):
 
                             res_idx += 1
             elif type(node_type.arity) == NodeDefinition.VariableArity and self.use_flat_strategy:
-                with Measure('var', Decoder.times):
-                    # TODO warning if max_arity < actual_arity
-                    dst = getattr(self, 'dist_' + node_type.id)
-                    infl = getattr(self, 'infl_' + node_type.id)
 
-                    batch_size = inp.shape[0]
+                # TODO warning if max_arity < actual_arity
+                dst = getattr(self, 'dist_' + node_type.id)
+                infl = getattr(self, 'infl_' + node_type.id)
 
-                    distribs = dst.compiled_call(inp)   # [batch * cut_arity, types+1] one special types means no child
-                    no_child_idx = len(self.all_types)
-                    max_children_arity = max([len(o.meta['target'].children) for o in ops]) if TR else self.max_arity
-                    EXTRA_CHILD = max_children_arity > self.cut_arity
+                batch_size = inp.shape[0]
 
-                    # if we have no info on children arity or there are some node with more children than our cut_arity
-                    # we gonna compute remaining children with the 'jolly' cell
-                    n = self.max_arity - self.cut_arity
-                    if n > 0:
-                        extra_dst = getattr(self, 'extra_dist_' + node_type.id)
-                        extra_infl = getattr(self, 'extra_infl_' + node_type.id)
+                distribs = dst.compiled_call(inp)   # [batch * cut_arity, types+1] one special types means no child
+                no_child_idx = len(self.all_types)
+                max_children_arity = max([len(o.meta['target'].children) for o in ops]) if TR else self.max_arity
+                EXTRA_CHILD = max_children_arity > self.cut_arity
+
+                # if we have no info on children arity or there are some node with more children than our cut_arity
+                # we gonna compute remaining children with the 'jolly' cell
+                n = self.max_arity - self.cut_arity
+                if n > 0:
+                    extra_dst = getattr(self, 'extra_dist_' + node_type.id)
+                    extra_infl = getattr(self, 'extra_infl_' + node_type.id)
 
 
 
-                        children_1ofk = tf.tile(tf.diag(tf.ones(n)), [batch_size, 1])
-                        tiled_embs = tf.tile(tf.expand_dims(inp, axis=1), [1, n, 1])
-                        extra_inp = tf.concat([tf.reshape(tiled_embs, [batch_size * n, -1]), children_1ofk], axis=1)
-                        extra_distrib = extra_dst(extra_inp)    # [batch * n, types + 1]
-
-                        if EXTRA_CHILD:
-                            distribs = tf.reshape(
-                                tf.concat([
-                                    tf.reshape(distribs, [batch_size, self.cut_arity, len(self.all_types)+1]),
-                                    tf.reshape(extra_distrib, [batch_size, n, len(self.all_types)+1])],
-                                    axis=1),
-                                [batch_size * self.max_arity, len(self.all_types)+1])
-                        elif TR:
-                            # train to not generate children
-                            batch.stack_to('distribs', extra_distrib)
-                            batch.stack_to('distribs_gt', tf.one_hot([no_child_idx] * extra_distrib.shape[0].value, len(self.all_types)+1))
-
-                    if TR:
-                        # assuming no empty interleaving children - all stacked to the left
-                        node_idx = [self.all_types_idx[o.meta['target'].children[c].node_type_id] if len(o.meta['target'].children) > c
-                                    else no_child_idx
-                                    for o in ops for c in range(self.max_arity if EXTRA_CHILD else self.cut_arity)]
-                    else:
-                        # node_idx = list(tf_random_choice_idx(distribs).numpy())
-                        node_idx = list(tf.argmax(distribs, axis=1).numpy())
-
-                    distrib_gt = tf.one_hot(node_idx, len(self.all_types)+1)
-
-                    if TR:
-                        batch.stack_to('distribs', distribs)
-                        batch.stack_to('distribs_gt', distrib_gt)
-
-                    # TODO check all the one_hot, are not differentiable!!
-
-                    distrib_gt = tf.reshape(distrib_gt, [batch_size, self.max_arity if EXTRA_CHILD else self.cut_arity, len(self.all_types)+1])
-
-                    first_distribs_gt = tf.reshape(distrib_gt[:, :self.cut_arity], [batch_size, -1])
-                    first_inp = tf.concat([inp, first_distribs_gt], axis=1)
-                    first_embs = infl.compiled_call(first_inp, min(max_children_arity, self.cut_arity))    #[arity, batch, embedding_size]
-                    first_embs = tf.reshape(tf.transpose(first_embs, [1, 0, 2]), [-1, self.embedding_size]) # [batch * max_children_arity, embedding_size]
-
-                    if TR:
-                        n = min(max_children_arity, self.cut_arity)
-                        children_indexes = tf.concat([
-                            tf.range(i * n, i * n + min(len(o.meta['target'].children), self.cut_arity))
-                            for i, o in zip(itertools.count(), ops)], axis=0)
-                        first_embs = tf.gather(first_embs, children_indexes)
-                        # retrieve the index where to store the results
-                        children_node_numbs = [c.meta['node_numb'] for o in ops for c in o.meta['target'].children[:self.cut_arity]]
-                        batch.scatter_update('embs', children_node_numbs, first_embs)
-                    else:
-                        # we're assuming children are born left to right
-                        idx = tf.reshape(tf.reshape(node_idx, [-1, self.max_arity if EXTRA_CHILD else self.cut_arity])[:, :min(max_children_arity, self.cut_arity)], [-1])
-                        children_indexes = [i for ni, i in zip(idx.numpy().tolist(), itertools.count()) if ni != no_child_idx]
-
-                        if len(children_indexes) > 0:
-                            first_embs = tf.gather(first_embs, children_indexes)
-                            first_new_node_numb = batch.add_rows('embs', first_embs)
+                    children_1ofk = tf.tile(tf.diag(tf.ones(n)), [batch_size, 1])
+                    tiled_embs = tf.tile(tf.expand_dims(inp, axis=1), [1, n, 1])
+                    extra_inp = tf.concat([tf.reshape(tiled_embs, [batch_size * n, -1]), children_1ofk], axis=1)
+                    extra_distrib = extra_dst(extra_inp)    # [batch * n, types + 1]
 
                     if EXTRA_CHILD:
-                        extra_distribs_gt = tf.reshape(distrib_gt[:, self.cut_arity:], [batch_size * (self.max_arity - self.cut_arity), (len(self.all_types) + 1)])
-                        extra_inp = tf.concat([extra_inp, extra_distribs_gt], axis=1)
-                        extra_embs = extra_infl(extra_inp)  # [batch * (max_arity - cut_arity), embedding_size]
+                        distribs = tf.reshape(
+                            tf.concat([
+                                tf.reshape(distribs, [batch_size, self.cut_arity, len(self.all_types)+1]),
+                                tf.reshape(extra_distrib, [batch_size, n, len(self.all_types)+1])],
+                                axis=1),
+                            [batch_size * self.max_arity, len(self.all_types)+1])
+                    elif TR:
+                        # train to not generate children
+                        batch.stack_to('distribs', extra_distrib)
+                        batch.stack_to('distribs_gt', tf.one_hot([no_child_idx] * extra_distrib.shape[0].value, len(self.all_types)+1))
 
-                        if TR:
-                            n = self.max_arity - self.cut_arity
-                            children_indexes = tf.concat([
-                                tf.range(i * n, i * n + len(o.meta['target'].children) - self.cut_arity)
-                                for i, o in zip(itertools.count(), ops) if len(o.meta['target'].children) > self.cut_arity], axis=0)
+                if TR:
+                    # assuming no empty interleaving children - all stacked to the left
+                    node_idx = [self.all_types_idx[o.meta['target'].children[c].node_type_id] if len(o.meta['target'].children) > c
+                                else no_child_idx
+                                for o in ops for c in range(self.max_arity if EXTRA_CHILD else self.cut_arity)]
+                else:
+                    # node_idx = list(tf_random_choice_idx(distribs).numpy())
+                    node_idx = list(tf.argmax(distribs, axis=1).numpy())
+
+                distrib_gt = tf.one_hot(node_idx, len(self.all_types)+1)
+
+                if TR:
+                    batch.stack_to('distribs', distribs)
+                    batch.stack_to('distribs_gt', distrib_gt)
+
+                # TODO check all the one_hot, are not differentiable!!
+
+                distrib_gt = tf.reshape(distrib_gt, [batch_size, self.max_arity if EXTRA_CHILD else self.cut_arity, len(self.all_types)+1])
+
+                first_distribs_gt = tf.reshape(distrib_gt[:, :self.cut_arity], [batch_size, -1])
+                first_inp = tf.concat([inp, first_distribs_gt], axis=1)
+                first_embs = infl.compiled_call(first_inp, min(max_children_arity, self.cut_arity))    #[arity, batch, embedding_size]
+                first_embs = tf.reshape(tf.transpose(first_embs, [1, 0, 2]), [-1, self.embedding_size]) # [batch * max_children_arity, embedding_size]
+
+                if TR:
+                    n = min(max_children_arity, self.cut_arity)
+                    children_indexes = tf.concat([
+                        tf.range(i * n, i * n + min(len(o.meta['target'].children), self.cut_arity))
+                        for i, o in zip(itertools.count(), ops)], axis=0)
+                    first_embs = tf.gather(first_embs, children_indexes)
+                    # retrieve the index where to store the results
+                    children_node_numbs = [c.meta['node_numb'] for o in ops for c in o.meta['target'].children[:self.cut_arity]]
+                    batch.scatter_update('embs', children_node_numbs, first_embs)
+                else:
+                    # we're assuming children are born left to right
+                    idx = tf.reshape(tf.reshape(node_idx, [-1, self.max_arity if EXTRA_CHILD else self.cut_arity])[:, :min(max_children_arity, self.cut_arity)], [-1])
+                    children_indexes = [i for ni, i in zip(idx.numpy().tolist(), itertools.count()) if ni != no_child_idx]
+
+                    if len(children_indexes) > 0:
+                        first_embs = tf.gather(first_embs, children_indexes)
+                        first_new_node_numb = batch.add_rows('embs', first_embs)
+
+                if EXTRA_CHILD:
+                    extra_distribs_gt = tf.reshape(distrib_gt[:, self.cut_arity:], [batch_size * (self.max_arity - self.cut_arity), (len(self.all_types) + 1)])
+                    extra_inp = tf.concat([extra_inp, extra_distribs_gt], axis=1)
+                    extra_embs = extra_infl(extra_inp)  # [batch * (max_arity - cut_arity), embedding_size]
+
+                    if TR:
+                        n = self.max_arity - self.cut_arity
+                        children_indexes = tf.concat([
+                            tf.range(i * n, i * n + len(o.meta['target'].children) - self.cut_arity)
+                            for i, o in zip(itertools.count(), ops) if len(o.meta['target'].children) > self.cut_arity], axis=0)
+                        extra_embs = tf.gather(extra_embs, children_indexes)
+                        extra_node_numbs = [c.meta['node_numb'] for o in ops for c in o.meta['target'].children[self.cut_arity:]]
+                        batch.scatter_update('embs', extra_node_numbs, extra_embs)
+                    else:
+                        # we're assuming children are born left to right
+                        idx = tf.reshape(tf.reshape(node_idx, [-1, self.max_arity ])[:,self.cut_arity:], [-1])
+                        children_indexes = [i for ni, i in zip(idx.numpy().tolist(), itertools.count()) if
+                                            ni != no_child_idx]
+
+                        if len(children_indexes) > 0:
                             extra_embs = tf.gather(extra_embs, children_indexes)
-                            extra_node_numbs = [c.meta['node_numb'] for o in ops for c in o.meta['target'].children[self.cut_arity:]]
-                            batch.scatter_update('embs', extra_node_numbs, extra_embs)
-                        else:
-                            # we're assuming children are born left to right
-                            idx = tf.reshape(tf.reshape(node_idx, [-1, self.max_arity ])[:,self.cut_arity:], [-1])
-                            children_indexes = [i for ni, i in zip(idx.numpy().tolist(), itertools.count()) if
-                                                ni != no_child_idx]
-
-                            if len(children_indexes) > 0:
-                                extra_embs = tf.gather(extra_embs, children_indexes)
-                                extra_new_node_numb = batch.add_rows('embs', extra_embs)
+                            extra_new_node_numb = batch.add_rows('embs', extra_embs)
 
                     first_count = 0
                     extra_count = 0

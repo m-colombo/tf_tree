@@ -1,5 +1,5 @@
 import random
-from tree.definition import TreeDefinition, NodeDefinition, Tree
+from definition import TreeDefinition, NodeDefinition, Tree
 import tensorflow as tf
 import typing as T
 
