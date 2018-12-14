@@ -2,6 +2,8 @@ import typing as T
 import tensorflow as tf
 from functools import reduce
 from collections import namedtuple
+import numpy as np
+
 
 class Tree:
     """Concrete tree instances"""
@@ -160,34 +162,15 @@ class Tree:
 
     @staticmethod
     def compare_trees(ts1: T.List["Tree"], ts2: T.List["Tree"]):
-        # TODO consider using batch for decoding for more efficient comparison
-        s_ok, v_ok = 0, 0
-        s_overlaps = []
-        v_overlaps = []
-        for t1, t2 in zip(ts1, ts2):
+        overlaps_s, overlaps_v = zip(*[ts1[i].compute_overlaps(ts2[i], True) for i in range(len(ts1))])
 
-            if t1.structural_equivalence(t2):
-                s_ok += 1
-                s_overlaps.append((1.0, 1.0))
+        overlaps_s_avg = float(np.mean(overlaps_s))
+        overlaps_v_avg = float(np.mean(overlaps_v))
+        overlaps_s_acc = np.sum(np.equal(overlaps_s, 1.0)) / len(overlaps_s)
+        overlaps_v_acc = np.sum(np.equal(overlaps_v, 1.0)) / len(overlaps_v)
 
-                if t1.values_equivalence(t2):   # TODO will be deadly slow when they match!
-                    v_ok += 1
-                    v_overlaps.append(1.0)
-                else:
-                    v_overlaps.append(0)    # TODO deadly slow t1.values_overlap(t2)
-            else:
-                v_overlaps.append(0.0)
-                s_overlaps.append(t1.structural_overlap(t2))
+        return overlaps_s_avg, overlaps_s_acc, overlaps_v_avg, overlaps_v_acc
 
-        avg_depth_overlap, avg_node_overlap = list(map(lambda x: sum(x) / float(len(x)), zip(*s_overlaps)))
-
-        return Tree.TreeComparisonInfo(
-            matching_struct=s_ok / float(len(ts1)),
-            matching_value=v_ok / float(len(ts1)),
-            struct_overlap_by_depth=avg_depth_overlap,
-            struct_overlap_by_node=avg_node_overlap,
-            value_overlap=sum(v_overlaps) / float(len(v_overlaps))
-        )
 
 class TrainingTree(Tree): # TODO remove class, no more needed. move tr_gt_value in Tree.meta
     def __init__(self, node_type_id: str, children: T.List["TrainingTree"] = None, meta=None,
