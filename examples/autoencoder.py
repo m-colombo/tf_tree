@@ -4,123 +4,14 @@ from batch import BatchOfTreesForEncoding, BatchOfTreesForDecoding
 from simple_expression import BinaryExpressionTreeGen, NaryExpressionTreeGen
 from definition import Tree
 
+from examples.flags_definition import *
+
 import tensorflow as tf
 import tensorflow.contrib.eager as tfe
 import tensorflow.contrib.summary as tfs
 
 import os
 import json
-
-
-def define_flags():
-
-    ##########
-    # Tree characteristics
-    ##########
-
-    tf.flags.DEFINE_bool(
-        "fixed_arity",
-        default=True,
-        help="Whether to employ trees whose nodes have always the same number of children" )
-
-    tf.flags.DEFINE_integer(
-        "max_depth",
-        default=4,
-        help="Maximum tree depth")
-
-    tf.flags.DEFINE_integer(
-        "max_arity",
-        default=3,
-        help="Maximum tree arity")
-
-    tf.flags.DEFINE_integer(
-        "max_node_count",
-        default=120,
-        help="Maximum total node count")
-
-    ##########
-    # Model parameters
-    ##########
-
-    tf.flags.DEFINE_integer(
-        "cut_arity",
-        default=2,
-        help="Children exceeding this cardinality are generated/embedded by the same cell."
-             "Only makes sense when using trees with a variable arity and employing the FLAT strategy ")
-
-    tf.flags.DEFINE_integer(
-        "embedding_size",
-        default=100,
-        help="Size of the embedding used during tree processing")
-
-    tf.flags.DEFINE_string(
-        "activation",
-        default='leaky_relu',
-        help="activation used where there are no particular constraints")
-
-    tf.flags.DEFINE_string(
-        "enc_variable_arity_strategy",
-        default="FLAT",
-        help="FLAT or REC")
-
-    tf.flags.DEFINE_string(
-        "dec_variable_arity_strategy",
-        default="FLAT",
-        help="FLAT or REC")
-
-    tf.flags.DEFINE_float(
-        "hidden_cell_coef",
-        default=0.3,
-        help="user to linear regres from input-output size to compute hidden size")
-
-    tf.flags.DEFINE_boolean(
-        "encoder_gate",
-        default=True,
-        help="")
-
-    tf.flags.DEFINE_boolean(
-        "decoder_gate",
-        default=False,
-        help="")
-
-    ##########
-    # Learning configuration
-    ##########
-
-    tf.flags.DEFINE_integer(
-        "max_iter",
-        default=5000,
-        help="Maximum number of iteration to train")
-
-    tf.flags.DEFINE_integer(
-        "check_every",
-        default=20,
-        help="How often (iterations) to check performances")
-
-    tf.flags.DEFINE_integer(
-        "batch_size",
-        default=64,
-        help="")
-
-    ##########
-    # Checkpoints and Logging
-    ##########
-
-    tf.flags.DEFINE_string(
-        "model_dir",
-        default="/tmp/tree_autoencoder/test",
-        help="Directory to put the model summaries, parameters and checkpoint.")
-
-    tf.flags.DEFINE_boolean(
-        "restore",
-        default=False,
-        help="Whether to restore a previously saved model")
-
-    tf.flags.DEFINE_boolean(
-        "overwrite",
-        default=False,
-        help="Whether to overwrite existing model directory")
-
 
 FLAGS = tf.flags.FLAGS
 
@@ -168,6 +59,9 @@ def main(argv=None):
         tree_gen = NaryExpressionTreeGen(0, 9, FLAGS.max_arity)
 
     def get_batch():
+        # return [Tree(node_type_id="add_n", children=[
+        #     Tree(node_type_id='num_value', value=tree_gen.NumValue(abstract_value=1)),
+        #     Tree(node_type_id='num_value', value=tree_gen.NumValue(abstract_value=4))]) for _ in range(10)]
         return [tree_gen.generate(FLAGS.max_depth) for _ in range(FLAGS.batch_size)]
 
     #########
@@ -225,7 +119,9 @@ def main(argv=None):
             grad = tape.gradient(loss, variables)
 
             gnorm = tf.global_norm(grad)
-            tfs.scalar("grad/global_norm", gnorm)
+            grad, _ = tf.clip_by_global_norm(grad, 0.02, gnorm)
+
+            tfs.scalar("norms/grad", gnorm)
 
             optimizer.apply_gradients(zip(grad, variables), global_step=tf.train.get_or_create_global_step())
 
@@ -233,6 +129,10 @@ def main(argv=None):
 
                 batch_dec_unsuperv = BatchOfTreesForDecoding(encodings, tree_gen.tree_def)
                 decoded_unsuperv = decoder(batch_dec_unsuperv)
+
+                print(xs[0])
+                print(decoded[0])
+                print(decoded_unsuperv[0])
 
                 _, _, v_avg_sup, v_acc_sup = Tree.compare_trees(xs, decoded)
                 s_avg, s_acc, v_avg, v_acc = Tree.compare_trees(xs, decoded_unsuperv)
@@ -253,5 +153,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    define_flags()
+    define_common_flags()
+    define_encoder_flags()
+    define_decoder_flags()
     tfe.run()

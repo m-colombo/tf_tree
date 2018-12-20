@@ -700,44 +700,44 @@ class Decoder(tf.keras.Model):
                             extra_embs = tf.gather(extra_embs, children_indexes)
                             extra_new_node_numb = batch.add_rows('embs', extra_embs)
 
-                    first_count = 0
-                    extra_count = 0
-                    stride = self.max_arity if EXTRA_CHILD else self.cut_arity
-                    for o, i in zip(ops, range(len(ops))):
+                first_count = 0
+                extra_count = 0
+                stride = self.max_arity if EXTRA_CHILD else self.cut_arity
+                for o, i in zip(ops, range(len(ops))):
 
-                        for c in range(stride): # TODO cycle only over generated children
-                            n = i * stride + c
-                            if node_idx[n] != no_child_idx:
+                    for c in range(stride): # TODO cycle only over generated children
+                        n = i * stride + c
+                        if node_idx[n] != no_child_idx:
 
-                                t = TrainingTree(self.all_types[node_idx[n]].id,
-                                                 meta={"depth": o.meta["depth"] + 1,
-                                                       "batch_idx": o.meta["batch_idx"]})
+                            t = TrainingTree(self.all_types[node_idx[n]].id,
+                                             meta={"depth": o.meta["depth"] + 1,
+                                                   "batch_idx": o.meta["batch_idx"]})
 
-                                if TR:
-                                    t.meta['target'] = o.meta['target'].children[c]
-                                    t.meta['node_numb'] = o.meta['target'].children[c].meta['node_numb']
-                                    t.tr_gt_value = o.meta["target"].children[c].value
+                            if TR:
+                                t.meta['target'] = o.meta['target'].children[c]
+                                t.meta['node_numb'] = o.meta['target'].children[c].meta['node_numb']
+                                t.tr_gt_value = o.meta["target"].children[c].value
 
-                                    if len(o.meta['target'].children[c].children) > self.max_arity:
-                                        raise ValueError("Maximum Arity Exceeded " + str(
-                                            len(o.meta['target'].children[c].children)) + ' > ' + str(self.max_arity))
+                                if len(o.meta['target'].children[c].children) > self.max_arity:
+                                    raise ValueError("Maximum Arity Exceeded " + str(
+                                        len(o.meta['target'].children[c].children)) + ' > ' + str(self.max_arity))
+                            else:
+                                if c >= self.cut_arity:
+                                    t.meta['node_numb'] = extra_new_node_numb[extra_count]
+                                    extra_count += 1
                                 else:
-                                    if c >= self.cut_arity:
-                                        t.meta['node_numb'] = extra_new_node_numb[extra_count]
-                                        extra_count += 1
-                                    else:
-                                        t.meta['node_numb'] = first_new_node_numb[first_count]
-                                        first_count += 1
+                                    t.meta['node_numb'] = first_new_node_numb[first_count]
+                                    first_count += 1
 
-                                    if node_count[o.meta['batch_idx']] > self.max_node_count or o.meta["depth"] + 1 > self.max_depth :
-                                        t.node_type_id = "TRUNCATED"
-                                    else:
-                                        node_count[o.meta['batch_idx']] += 1
+                                if node_count[o.meta['batch_idx']] > self.max_node_count or o.meta["depth"] + 1 > self.max_depth :
+                                    t.node_type_id = "TRUNCATED"
+                                else:
+                                    node_count[o.meta['batch_idx']] += 1
 
-                                if t.node_type_id != "TRUNCATED":
-                                    all_ops[t.node_type_id].append(t)
+                            if t.node_type_id != "TRUNCATED":
+                                all_ops[t.node_type_id].append(t)
 
-                                o.children += [t]
+                            o.children += [t]
             else:
                 raise ValueError("Node arity type not handled")
 
