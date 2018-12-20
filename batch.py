@@ -63,6 +63,10 @@ class BatchOfTreesForEncoding(BatchOfTrees):
 
         return embs_per_batch
 
+    def get_root_embeddings(self):
+        return tf.gather(self['embs'], [t.meta['node_numb'] for t in self.trees])
+
+
 class BatchOfTreesForDecoding(BatchOfTrees):
     def __init__(self, root_embeddings: tf.Tensor, tree_def: TreeDefinition, target_trees: T.List[Tree] = None):
 

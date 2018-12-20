@@ -384,7 +384,11 @@ class Encoder(tf.keras.Model):
             for op in ops:
                 op.meta['computed'] = True
 
-    def __call__(self, batch: BatchOfTreesForEncoding):
+    def __call__(self, batch: T.Union[BatchOfTreesForEncoding, T.List[Tree]]):
+
+        if not type(batch) == BatchOfTreesForEncoding:
+            batch = BatchOfTreesForEncoding(batch, self.embedding_size)
+
         all_ops = {}    # (op_type, node_id) -> [inputs]
 
         # 1) visit the trees, store leaves computation and create back-links to traverse the tree bottom-up
@@ -564,5 +568,5 @@ class Encoder(tf.keras.Model):
                         # avoid computing multiple times the parent when multiple children have been computed ad once
                         parent.meta['added'] = None
 
-        return tf.gather(batch['embs'], [t.meta['node_numb'] for t in batch.trees])
+        return batch
 

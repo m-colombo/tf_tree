@@ -254,11 +254,11 @@ class DecoderCellsBuilder:
 
 class Decoder(tf.keras.Model):
 
-    def __init__(self, _no_positional_arguments=None,
+    def __init__(self, *,
                  tree_def: TreeDefinition = None, embedding_size: int = None,
                  max_depth: int = None, max_arity: int = None, cut_arity: int = None,
                  cellbuilder: DecoderCellsBuilder = None, max_node_count: int = 1000, take_root_along=True,
-                 variable_arity_strategy="FLAT", attention=False):
+                 variable_arity_strategy="FLAT"):
         """
 
         :param tree_def:
@@ -272,9 +272,6 @@ class Decoder(tf.keras.Model):
         """
         super(Decoder, self).__init__()
 
-        if _no_positional_arguments is not None:
-            raise ValueError("Call with positional arguments is not allowed")
-
         self.cut_arity = cut_arity
         self.max_arity = max_arity
         self.max_depth = max_depth
@@ -283,7 +280,6 @@ class Decoder(tf.keras.Model):
         self.embedding_size = embedding_size
 
         self.use_flat_strategy = variable_arity_strategy == "FLAT"
-        self.attention = attention
 
         self.tree_def = tree_def
         self.node_map = {n.id: n for n in tree_def.node_types}
@@ -297,9 +293,6 @@ class Decoder(tf.keras.Model):
         self.all_types_idx = {t.id: i for t, i in zip(self.all_types, range(len(self.all_types)))}
 
         self.take_root_along = take_root_along
-
-        if attention:
-            self.attention_f = tf.keras.layers.Dense(1, activation=tf.sigmoid)
 
         # if not attr, they don't get registered as variable by the keras model (dunno why)
         for t in tree_def.node_types:
@@ -324,8 +317,10 @@ class Decoder(tf.keras.Model):
             if t.value_type is not None:
                 setattr(self, 'value_'+t.id, cellbuilder.build_value_inflater(t, self, name='value_'+t.id))
 
-    times = {}
-    def __call__(self, batch: BatchOfTreesForDecoding, augment_fn=None, attention_batch=None):
+    def __call__(self, *,
+                 encodings: tf.Tensor = None, targets: T.List[Tree] = None,     # this two lines are mutual exclusive
+                 batch: BatchOfTreesForDecoding = None,             #
+                 augment_fn=None):
         """ Batched computation. All fireable operations are grouped according to node kinds and the one single aggregated
         operation is ran. Turned out to give a ~2x speedup.
 
@@ -334,11 +329,14 @@ class Decoder(tf.keras.Model):
         :param augment_fn: given a list of embeddings and their index in the batch returns a list of extra info to use in the decoding ([n, embedding_size], [n]) -> [n, some_size]. For instance useful for some attention mechanism
         :return: [batch_size] of training trees
         """
+        if batch is None:
+            if encodings is None:
+                raise ValueError("Or batch or xs must be set")
+            else:
+                batch = BatchOfTreesForDecoding(encodings, self.tree_def, targets)
+
         all_ops = {nt.id: [] for nt in self.all_types}
         TR = batch.target_trees is not None
-
-        if self.attention:
-            all_encoding_embedding = attention_batch.get_all_embeggings()
 
         # augment embeddings
         if augment_fn is not None:
@@ -398,16 +396,16 @@ class Decoder(tf.keras.Model):
             inp = tf.gather(batch['embs'], [o.meta['node_numb'] for o in ops])
             batch_idxs = list(map(lambda x: x.meta['batch_idx'], ops))
 
-            if self.attention:
-                all_new_inp = []
-                for i, o in zip(itertools.count(), ops):
-                    b = all_encoding_embedding[
-                        o.meta['batch_idx'] % len(all_encoding_embedding)]  # TODO really hardcoded
-                    with_emb = tf.concat([b, inp[i:i+1]], axis=0)
-                    concated = tf.concat([with_emb, tf.tile(tf.reshape(inp[i], [1, -1]), [with_emb.shape[0], 1])], axis=1)
-                    gates = tf.nn.softmax(self.attention_f(concated), axis=0)
-                    all_new_inp.append(tf.reduce_sum(concated * gates, axis=0))
-                inp = tf.stack(all_new_inp)
+            # if self.attention:
+            #     all_new_inp = []
+            #     for i, o in zip(itertools.count(), ops):
+            #         b = all_encoding_embedding[
+            #             o.meta['batch_idx'] % len(all_encoding_embedding)]  # TODO really hardcoded
+            #         with_emb = tf.concat([b, inp[i:i+1]], axis=0)
+            #         concated = tf.concat([with_emb, tf.tile(tf.reshape(inp[i], [1, -1]), [with_emb.shape[0], 1])], axis=1)
+            #         gates = tf.nn.softmax(self.attention_f(concated), axis=0)
+            #         all_new_inp.append(tf.reduce_sum(concated * gates, axis=0))
+            #     inp = tf.stack(all_new_inp)
 
             # add to the input the 'augmented info'
             if augment_fn is not None:
@@ -741,4 +739,4 @@ class Decoder(tf.keras.Model):
             else:
                 raise ValueError("Node arity type not handled")
 
-        return batch.decoded_trees
+        return batch

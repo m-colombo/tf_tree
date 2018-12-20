@@ -59,9 +59,6 @@ def main(argv=None):
         tree_gen = NaryExpressionTreeGen(0, 9, FLAGS.max_arity)
 
     def get_batch():
-        # return [Tree(node_type_id="add_n", children=[
-        #     Tree(node_type_id='num_value', value=tree_gen.NumValue(abstract_value=1)),
-        #     Tree(node_type_id='num_value', value=tree_gen.NumValue(abstract_value=4))]) for _ in range(10)]
         return [tree_gen.generate(FLAGS.max_depth) for _ in range(FLAGS.batch_size)]
 
     #########
@@ -94,8 +91,7 @@ def main(argv=None):
                           DecoderCellsBuilder.simple_node_inflater_builder(FLAGS.hidden_cell_coef,
                                                                            activation=activation,
                                                                            gate=FLAGS.decoder_gate)),
-                      variable_arity_strategy=FLAGS.dec_variable_arity_strategy,
-                      attention=False)
+                      variable_arity_strategy=FLAGS.dec_variable_arity_strategy)
 
     ###########
     # TRAINING
@@ -107,10 +103,8 @@ def main(argv=None):
         for i in range(FLAGS.max_iter):
             with tfe.GradientTape() as tape:
                 xs = get_batch()
-                batch_enc = BatchOfTreesForEncoding(xs, FLAGS.embedding_size)
-                encodings = encoder(batch_enc)
-                batch_dec = BatchOfTreesForDecoding(encodings, tree_gen.tree_def, target_trees=xs)
-                decoded = decoder(batch_dec)
+                batch_enc = encoder(xs)
+                batch_dec = decoder(encodings=batch_enc.get_root_embeddings(), targets=xs)
 
                 loss_struct, loss_val = batch_dec.reconstruction_loss()
                 loss = loss_struct + loss_val
@@ -127,15 +121,10 @@ def main(argv=None):
 
             if i % FLAGS.check_every == 0:
 
-                batch_dec_unsuperv = BatchOfTreesForDecoding(encodings, tree_gen.tree_def)
-                decoded_unsuperv = decoder(batch_dec_unsuperv)
+                batch_unsuperv = decoder(encodings=batch_enc.get_root_embeddings())
 
-                print(xs[0])
-                print(decoded[0])
-                print(decoded_unsuperv[0])
-
-                _, _, v_avg_sup, v_acc_sup = Tree.compare_trees(xs, decoded)
-                s_avg, s_acc, v_avg, v_acc = Tree.compare_trees(xs, decoded_unsuperv)
+                _, _, v_avg_sup, v_acc_sup = Tree.compare_trees(xs, batch_dec.decoded_trees)
+                s_avg, s_acc, v_avg, v_acc = Tree.compare_trees(xs, batch_unsuperv.decoded_trees)
 
                 print("{0}:\t{1:.3f}".format(i, loss))
 
