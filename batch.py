@@ -1,7 +1,7 @@
 import tensorflow as tf
 import tensorflow.contrib.eager as tfe
 import typing as T
-from definition import Tree, TreeDefinition, NodeDefinition
+from .definition import Tree, TreeDefinition, NodeDefinition
 from functools import reduce
 
 class BatchOfTrees:

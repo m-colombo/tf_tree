@@ -1,6 +1,6 @@
 import tensorflow as tf
-from definition import TreeDefinition, Tree, NodeDefinition
-from batch import BatchOfTreesForEncoding
+from .definition import TreeDefinition, Tree, NodeDefinition
+from .batch import BatchOfTreesForEncoding
 import typing as T
 
 
@@ -384,7 +384,7 @@ class Encoder(tf.keras.Model):
             for op in ops:
                 op.meta['computed'] = True
 
-    def __call__(self, batch: T.Union[BatchOfTreesForEncoding, T.List[Tree]]):
+    def __call__(self, batch: T.Union[BatchOfTreesForEncoding, T.List[Tree]]) -> BatchOfTreesForEncoding:
 
         if not type(batch) == BatchOfTreesForEncoding:
             batch = BatchOfTreesForEncoding(batch, self.embedding_size)
