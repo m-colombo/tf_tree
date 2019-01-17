@@ -1,6 +1,6 @@
 import tensorflow as tf
-from .definition import TreeDefinition, Tree, NodeDefinition
-from .batch import BatchOfTreesForEncoding
+from tensorflow_trees.definition import TreeDefinition, Tree, NodeDefinition
+from tensorflow_trees.batch import BatchOfTreesForEncoding
 import typing as T
 
 

@@ -1,8 +1,8 @@
 import tensorflow as tf
-import tensorflow.contrib.eager as tfe
 import typing as T
-from .definition import Tree, TreeDefinition, NodeDefinition
+from tensorflow_trees.definition import Tree, TreeDefinition, NodeDefinition
 from functools import reduce
+
 
 class BatchOfTrees:
     def __init__(self):
@@ -52,7 +52,7 @@ class BatchOfTreesForEncoding(BatchOfTrees):
 
         self['embs'] = tf.zeros([self.counters['embs'] + 1, embedding_size])
 
-    def get_all_embeggings(self):
+    def get_all_embeddings(self):
         def visit(t):
             return [t.meta['node_numb']] + list(reduce(lambda x,y: x+y, map(visit, t.children), []))
         embs_per_batch = []
@@ -182,8 +182,6 @@ class BatchOfTreesForDecoding(BatchOfTrees):
 
         return list(map(lambda l: value_t.representation_to_abstract_batch(l), leaves[:4]))
 
-    def compute_bleu_score(self, dictionary):
-        pass
 
     def reconstruction_loss(self, ignore_values={}):
 

@@ -32,7 +32,6 @@ class Tree:
 
         return s
 
-
     def leaves(self):
         if len(self.children) == 0:
             return [self.value]
@@ -98,54 +97,6 @@ class Tree:
             return s_acc, v_acc
         else:
             return 0, 0
-
-    def structural_overlap(self, t2):
-        """:return [0,1], [0,1]. percentage of matching structure (starting from the root) respectively computed on nodes and tree depth (of t1, it isn't commutative)"""
-        # TODO really inefficient - implement using BatchForDecoding?
-        # TODO implement correctly as in the thesis
-        max_depth = self.calculate_max_depth()
-        node_count = self.calculate_node_count()
-
-        def visit(t1, t2):
-            if t1.node_type_id == t2.node_type_id:
-                if len(t1.children) > 0 and len(t2.children) > 0:
-                    depths, counts = zip(*map(lambda c: visit(c[0], c[1]), zip(t1.children, t2.children)))
-                    return 1 + max(depths), 1 + sum(counts)
-                else:
-                    return 1, 1
-            else:
-                return 0, 0
-
-        depth, count = visit(self, t2)
-        return depth / float(max_depth), count / float(node_count)
-
-    def structural_equivalence(self, t2):
-        return self.node_type_id == t2.node_type_id and\
-               len(self.children) == len(t2.children) and \
-               all(map(lambda x: x[0].structural_equivalence(x[1]), zip(self.children, t2.children)))
-
-    def values_overlap(self, t2, ignore_leaves=False):
-        """Assumes structural matching"""
-        def visit(t1, t2):
-            if t1.value is not None and t2.value is not None and (not ignore_leaves or len(t1.children) > 0):
-                value_match = int(t1.value.abstract_value == t2.value.abstract_value)
-                if len(self.children) > 0 and len(t2.children) > 0:
-                    matching_values, values_count = map(sum, zip(*map(lambda c: visit(c[0], c[1]),zip(t1.children, t2.children))))
-                else:
-                    matching_values, values_count = 0, 0
-                return value_match + matching_values, values_count + 1
-            else:
-                return 0, 0
-        mv, av = visit(self, t2)
-        return mv/float(av)
-
-    def values_equivalence(self, t2):
-
-        if (self.value is None and t2.value is None) or \
-                self.value.abstract_value == t2.value.abstract_value:   # TODO not really safe nor general
-            return all(map(lambda ts: ts[0].values_equivalence(ts[1]), zip(self.children, t2.children)))
-        else:
-            return False
 
     def clone(self, clone_value=False):
         return Tree(node_type_id=self.node_type_id,
@@ -242,24 +193,6 @@ class NodeDefinition:
             self._abstract_value = None
             self._representation = t
 
-    @staticmethod
-    def NumValue(min_value, max_value):
-        """Build a Value class that handle numbers in [min_value, max_value] encoded as 1ofk"""
-
-        size = max_value - min_value + 1
-
-        class NumValue(NodeDefinition.Value):
-            representation_shape = size
-
-            @staticmethod
-            def representation_to_abstract_batch(t: tf.Tensor):
-                return (tf.argmax(t, axis=-1) + min_value).numpy()
-
-            @staticmethod
-            def abstract_to_representation_batch(v: T.List[T.Any]):
-                return tf.one_hot(list(map(lambda x: x- min_value, v)), size, axis=-1)
-
-        return NumValue
 
     class Arity:
         pass

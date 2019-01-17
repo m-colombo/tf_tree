@@ -1,7 +1,26 @@
 import random
-from .definition import TreeDefinition, NodeDefinition, Tree
+from tensorflow_trees.definition import TreeDefinition, NodeDefinition, Tree
 import tensorflow as tf
 import typing as T
+
+
+def NumValue(min_value, max_value):
+    """Build a Value class that handle numbers in [min_value, max_value] encoded as 1ofk"""
+
+    size = max_value - min_value + 1
+
+    class NumValue(NodeDefinition.Value):
+        representation_shape = size
+
+        @staticmethod
+        def representation_to_abstract_batch(t: tf.Tensor):
+            return (tf.argmax(t, axis=-1) + min_value).numpy()
+
+        @staticmethod
+        def abstract_to_representation_batch(v: T.List[T.Any]):
+            return tf.one_hot(list(map(lambda x: x - min_value, v)), size, axis=-1)
+
+    return NumValue
 
 
 class BinaryExpressionTreeGen:
@@ -10,7 +29,7 @@ class BinaryExpressionTreeGen:
         if min_value < 0 or min_value >= max_value:
             raise ValueError()
 
-        self.NumValue = NodeDefinition.NumValue(min_value, max_value)
+        self.NumValue = NumValue(min_value, max_value)
 
         self.tree_def = TreeDefinition(
             node_types=[
@@ -24,7 +43,7 @@ class BinaryExpressionTreeGen:
             node_types=[
                 NodeDefinition("add_bin", may_root=True, arity=NodeDefinition.FixedArity(2)),
                 NodeDefinition("sub_bin", may_root=True, arity=NodeDefinition.FixedArity(2)),
-                NodeDefinition("num_value", may_root=True, arity=NodeDefinition.FixedArity(0), value_type=NodeDefinition.NumValue(min_value - max_value, max_value * 2))
+                NodeDefinition("num_value", may_root=True, arity=NodeDefinition.FixedArity(0), value_type=NumValue(min_value - max_value, max_value * 2))
             ]
         )
 
@@ -124,7 +143,7 @@ class NaryExpressionTreeGen(BinaryExpressionTreeGen):
                 NodeDefinition("add_n", may_root=True, arity=NodeDefinition.VariableArity(min_value=2, max_value=max_arity)),
                 NodeDefinition("sub_bin", may_root=True, arity=NodeDefinition.FixedArity(2)),
                 NodeDefinition("num_value", may_root=True, arity=NodeDefinition.FixedArity(0),
-                               value_type=NodeDefinition.NumValue(min_value - max_value, max_value * max_arity))
+                               value_type=NumValue(min_value - max_value, max_value * max_arity))
             ]
         )
 

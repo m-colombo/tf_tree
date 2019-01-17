@@ -1,8 +1,7 @@
-from tree_encoder import Encoder, EncoderCellsBuilder
-from tree_decoder import Decoder, DecoderCellsBuilder
-from batch import BatchOfTreesForEncoding, BatchOfTreesForDecoding
-from simple_expression import BinaryExpressionTreeGen, NaryExpressionTreeGen
-from definition import Tree
+from tensorflow_trees.tree_encoder import Encoder, EncoderCellsBuilder
+from tensorflow_trees.tree_decoder import Decoder, DecoderCellsBuilder
+from tensorflow_trees.simple_expression import BinaryExpressionTreeGen, NaryExpressionTreeGen
+from tensorflow_trees.definition import Tree
 
 from examples.flags_definition import *
 
