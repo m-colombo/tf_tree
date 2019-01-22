@@ -396,17 +396,6 @@ class Decoder(tf.keras.Model):
             inp = tf.gather(batch['embs'], [o.meta['node_numb'] for o in ops])
             batch_idxs = list(map(lambda x: x.meta['batch_idx'], ops))
 
-            # if self.attention:
-            #     all_new_inp = []
-            #     for i, o in zip(itertools.count(), ops):
-            #         b = all_encoding_embedding[
-            #             o.meta['batch_idx'] % len(all_encoding_embedding)]  # TODO really hardcoded
-            #         with_emb = tf.concat([b, inp[i:i+1]], axis=0)
-            #         concated = tf.concat([with_emb, tf.tile(tf.reshape(inp[i], [1, -1]), [with_emb.shape[0], 1])], axis=1)
-            #         gates = tf.nn.softmax(self.attention_f(concated), axis=0)
-            #         all_new_inp.append(tf.reduce_sum(concated * gates, axis=0))
-            #     inp = tf.stack(all_new_inp)
-
             # add to the input the 'augmented info'
             if augment_fn is not None:
                 inp = augment_fn(inp, batch_idxs)

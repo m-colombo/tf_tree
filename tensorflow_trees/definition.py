@@ -77,7 +77,7 @@ class Tree:
                     visit(c1, c2)
                     if also_values and c1.value is not None and not (len(c1.children) == 0 and skip_leaves_value):
                         all_value_count += 1
-                        if c1.value.abstract_value == c2.value.abstract_value:  # TODO need to be implemented by the abstract value
+                        if c1.value.abstract_value == c2.value.abstract_value:
                             matched_value_count += 1
 
         if self.node_type_id == t2.node_type_id:
@@ -86,7 +86,7 @@ class Tree:
             t2_nodes = 1
             if also_values and self.value is not None:
                 all_value_count += 1
-                if self.value.abstract_value == t2.value.abstract_value:    # TODO need to be implemented by the abstract value
+                if self.value.abstract_value == t2.value.abstract_value:
                     matched_value_count += 1
             visit(self, t2)
             s_acc = 2 * bcpt_nodes / float(t1_nodes + t2_nodes)
