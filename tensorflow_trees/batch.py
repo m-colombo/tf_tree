@@ -196,11 +196,6 @@ class BatchOfTreesForDecoding(BatchOfTrees):
             list(map(gather, node.children))
 
         list(map(gather, self.decoded_trees))
-        # looks like it doesn't really help to initially scale loss accordingly to depth in the tree, probably propagation
-        # depth_scale_coefs = {
-        #     k: scale_start + (scale_end - scale_start) * ((self.depths[k]) / float(max_depth)) ** (1/float(scale_exp)) for k in
-        # self.depths.keys()
-        # }
 
         sample_error = tf.square(self.get_stacked('distribs') - self.get_stacked('distribs_gt'))
         d_loss = tf.reduce_mean(tf.reduce_sum(sample_error, axis=1))

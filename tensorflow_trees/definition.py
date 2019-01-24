@@ -57,9 +57,6 @@ class Tree:
         arities = _visit(self)
         return sum(arities)/len(arities) if arities else None
 
-    def equiv(self, t2):
-        return self.structural_equivalence(t2) and self.values_equivalence(t2)
-
     def compute_overlaps(self, t2, also_values=False, skip_leaves_value=False):
         t1_nodes, t2_nodes = 0, 0
         bcpt_nodes = 0
