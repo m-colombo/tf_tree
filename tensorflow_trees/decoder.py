@@ -4,7 +4,138 @@ import itertools
 
 from tensorflow_trees.definition import TreeDefinition, Tree, TrainingTree, NodeDefinition
 from tensorflow_trees.batch import BatchOfTreesForDecoding
-from tensorflow_trees.decoder_cells_builder import DecoderCellsBuilder
+from tensorflow_trees.decoder_cells import GatedFixedArityNodeDecoder, ParallelDense
+
+
+class DecoderCellsBuilder:
+    """ Define interfaces and simple implementations for a cells builder, factory used for the decoder modules.
+           - Distrib : generates a distribution over nodes types
+           - Value infl. : projects from the embedding space to some value space
+           - Node infl. : from parent embedding generates children embeddings (actual shapes depends on node arity)
+       """
+
+    def __init__(self,
+                 distrib_builder: T.Callable[[T.Tuple[int, int], T.Optional[str]], tf.keras.Model],
+                 value_inflater_builder: T.Callable[[NodeDefinition, T.Optional[str]], tf.keras.Model],
+                 node_inflater_builder: T.Callable[[NodeDefinition, "Decoder", T.Optional[str]], tf.keras.Model]):
+        """Simple implementation which just use callables, avoiding superfluous inheritance
+
+        :param distrib_builder: see self.build_distrib_cell
+        :param value_inflater_builder: see self.build_value_inflater
+        :param node_inflater_builder: see self.build_node_inflater
+        """
+        self._distrib_builder = distrib_builder
+        self._value_inflater_builder = value_inflater_builder
+        self._node_inflater_builder = node_inflater_builder
+
+    def build_distrib_cell(self, output_size: (int, int), decoder: "Decoder", name=None) -> tf.keras.Model:
+        """Build a distribution cell that given an embedding returns a output_size[0] concatenated probability vector of size output_size[1]"""
+        m = self._distrib_builder(output_size, decoder, name)
+        # setattr(m, 'compiled_call', tf.contrib.eager.defun(m))   # it's actually slower
+        setattr(m, 'compiled_call', m.__call__)
+        return m
+
+    def build_value_inflater(self, node_def: NodeDefinition, decoder: "Decoder", name=None) -> tf.keras.Model:
+        """Build a cell that projects an embedding in the node value space"""
+        m = self._value_inflater_builder(node_def, decoder, name)
+        # setattr(m, 'compiled_call', tf.contrib.eager.defun(m))   # it's actually slower
+        setattr(m, 'compiled_call', m.__call__)
+        return m
+
+    def build_node_inflater(self, node_def: NodeDefinition, decoder: "Decoder", name=None) -> tf.keras.Model:
+        """Build a cell that given parent embedding returns children embeddings.
+            - for FixedArity nodes the output is the concat of all the chlidren embeddings
+            - for VariableArity nodes it's a RNN - take (state_embedding) as input and returns (child_embedding, new_state_embedding)
+        """
+        m = self._node_inflater_builder(node_def, decoder, name)
+        if type(m) == tuple:
+            for mi in m:
+                # setattr(mi, 'compiled_call', tf.contrib.eager.defun(mi))   # it's actually slower
+                setattr(mi, 'compiled_call', mi.__call__)
+        else:
+            # setattr(m, 'compiled_call', tf.contrib.eager.defun(m))   # it's actually slower
+            setattr(m, 'compiled_call', m.__call__)
+
+        return m
+
+    @staticmethod
+    def simple_distrib_cell_builder(hidden_coef, activation=tf.nn.relu):
+        def f(output_size: (int, int), decoder: Decoder, name=None):
+            total_output_size = output_size[0] * output_size[1]
+
+            size1 = int((total_output_size + decoder.embedding_size) * hidden_coef)
+            size2 = int((size1 + decoder.embedding_size) * hidden_coef)
+
+            return tf.keras.Sequential([
+                tf.keras.layers.Dense(300, activation=activation),
+                # tf.keras.layers.Dense(200, activation=activation),
+                tf.keras.layers.Dense(output_size[0] * output_size[1]),
+                tf.keras.layers.Lambda(lambda x: tf.reshape(x, [-1, output_size[1]]), output_shape=(output_size[1],)),
+                tf.keras.layers.Softmax()
+            ], name=name)
+        return f
+
+    @staticmethod
+    def simple_node_inflater_builder(hidden_coef: float, activation=tf.nn.relu, gate=True):
+        def f(node_def: NodeDefinition, decoder, name=None):
+            if type(node_def.arity) == NodeDefinition.FixedArity:
+                if gate:
+                    return GatedFixedArityNodeDecoder(activation=activation, hidden_coef=hidden_coef,
+                                                  embedding_size=decoder.embedding_size,
+                                                  arity=node_def.arity.value, name=name)
+                else:
+                    return tf.keras.Sequential([
+                                        tf.keras.layers.Dense(
+                        int(hidden_coef * decoder.embedding_size * node_def.arity.value), activation=activation),
+                                        tf.keras.layers.Dense(decoder.embedding_size * node_def.arity.value,
+                                                               activation=activation),
+                    ], name=name)
+            elif type(node_def.arity) == NodeDefinition.VariableArity and not decoder.use_flat_strategy:
+                return tf.keras.Sequential([
+                    tf.keras.layers.Dense(int(decoder.embedding_size * 2 * hidden_coef), activation=activation),
+                    tf.keras.layers.Dense(decoder.embedding_size * 2, activation=activation),
+                ], name=name)
+            elif type(node_def.arity) == NodeDefinition.VariableArity and decoder.use_flat_strategy:
+                return ParallelDense(activation=activation, hidden_size=decoder.embedding_size,
+                                     output_size=decoder.embedding_size,
+                                     parallel_clones=decoder.cut_arity, gated=gate, name=name), \
+                       tf.keras.Sequential([
+                           tf.keras.layers.Dense(int(decoder.embedding_size * (1+hidden_coef*0.5)), activation=activation),
+                           tf.keras.layers.Dense(decoder.embedding_size, activation=activation),
+                       ], name=name+'_extra')
+        return f
+
+    @staticmethod
+    def simple_1ofk_value_inflater_builder(hidden_coef, activation=tf.nn.relu):
+        def f(node_def: NodeDefinition, decoder: "Decoder", name=None):
+            size1 = int((node_def.value_type.representation_shape + decoder.embedding_size) * hidden_coef)
+            size2 = int((size1 + decoder.embedding_size) * hidden_coef)
+            return tf.keras.Sequential([
+                tf.keras.layers.Dense(2*size1, activation=activation),
+                # tf.keras.layers.Dense(size2, activation=activation),
+                tf.keras.layers.Dense(node_def.value_type.representation_shape),
+                tf.keras.layers.Softmax()
+            ], name=name)
+        return f
+
+    @staticmethod
+    def simple_dense_value_inflater_builder(hidden_coef, activation=tf.nn.relu):
+        def f(node_def: NodeDefinition, decoder: "Decoder", name=None):
+            size1 = int((node_def.value_type.representation_shape + decoder.embedding_size) * hidden_coef)
+            size2 = int((size1 + decoder.embedding_size) * hidden_coef)
+            return tf.keras.Sequential([
+                tf.keras.layers.Dense(size1, activation=activation),
+                tf.keras.layers.Dense(size2, activation=activation),
+                tf.keras.layers.Dense(node_def.value_type.representation_shape),
+            ], name=name)
+        return f
+
+    @staticmethod
+    def node_map(map):
+        def f(node_def, *args, **kwargs):
+            return map[node_def.id](node_def, *args, **kwargs)
+        return f
+
 
 
 class Decoder(tf.keras.Model):
@@ -12,7 +143,7 @@ class Decoder(tf.keras.Model):
     def __init__(self, *,
                  tree_def: TreeDefinition = None, embedding_size: int = None,
                  max_depth: int = None, max_arity: int = None, cut_arity: int = None,
-                 cellbuilder: DecoderCellsBuilder = None, max_node_count: int = 1000, take_root_along=True,
+                 cellsbuilder: DecoderCellsBuilder = None, max_node_count: int = 1000, take_root_along=True,
                  variable_arity_strategy="FLAT"):
         """
 
@@ -20,7 +151,7 @@ class Decoder(tf.keras.Model):
         :param embedding_size:
         :param max_depth: after the tree generation is truncated
         :param max_arity: limit the max arity of the generated tree, must be more than any provided tree
-        :param cellbuilder:
+        :param cellsbuilder:
         :param max_node_count: limit the number of ndoe when unsupervised - avoid children nodes explosion
         :param take_root_along: whether to concat initial embedding at every step
         :param variable_arity_strategy: FLAT | REC .
@@ -42,7 +173,7 @@ class Decoder(tf.keras.Model):
         self.root_types = self.tree_def.root_types
         self.root_types_idx = {t.id: i for t, i in zip(self.root_types, range(len(self.root_types)))}
 
-        self.root_distrib = cellbuilder.build_distrib_cell((1, len(self.root_types)), self, name='distrib_root')
+        self.root_distrib = cellsbuilder.build_distrib_cell((1, len(self.root_types)), self, name='distrib_root')
 
         self.all_types = self.tree_def.node_types
         self.all_types_idx = {t.id: i for t, i in zip(self.all_types, range(len(self.all_types)))}
@@ -52,25 +183,25 @@ class Decoder(tf.keras.Model):
         # if not attr, they don't get registered as variable by the keras model (dunno why)
         for t in tree_def.node_types:
             if type(t.arity) == NodeDefinition.FixedArity and t.arity.value > 0:
-                setattr(self, 'dist_' + t.id, cellbuilder.build_distrib_cell((t.arity.value, len(self.all_types)), self, name="distrib_" + t.id))
-                setattr(self, 'infl_' + t.id, cellbuilder.build_node_inflater(t, self, name="inflater_" + t.id))
+                setattr(self, 'dist_' + t.id, cellsbuilder.build_distrib_cell((t.arity.value, len(self.all_types)), self, name="distrib_" + t.id))
+                setattr(self, 'infl_' + t.id, cellsbuilder.build_node_inflater(t, self, name="inflater_" + t.id))
             elif type(t.arity) == NodeDefinition.VariableArity:
                 if self.use_flat_strategy:
-                    first_children, extra_children = cellbuilder.build_node_inflater(t, self, name="inflater_" + t.id)
+                    first_children, extra_children = cellsbuilder.build_node_inflater(t, self, name="inflater_" + t.id)
 
                     # for first children, up to cut_arity, are computed by dedicated cells
-                    setattr(self, 'dist_' + t.id, cellbuilder.build_distrib_cell((self.cut_arity, len(self.all_types) + 1), self, name="distrib_" + t.id))  # one special output for - nochild
+                    setattr(self, 'dist_' + t.id, cellsbuilder.build_distrib_cell((self.cut_arity, len(self.all_types) + 1), self, name="distrib_" + t.id))  # one special output for - nochild
                     setattr(self, 'infl_' + t.id, first_children)
 
                     # the same cell is used to compute the tail of the children, those who are rare
-                    setattr(self, 'extra_dist_' + t.id, cellbuilder.build_distrib_cell((1, len(self.all_types) + 1), self, name="extra_distrib_" + t.id))  # one special output for - nochild
+                    setattr(self, 'extra_dist_' + t.id, cellsbuilder.build_distrib_cell((1, len(self.all_types) + 1), self, name="extra_distrib_" + t.id))  # one special output for - nochild
                     setattr(self, 'extra_infl_' + t.id, extra_children)
                 else:
-                    setattr(self, 'dist_'+t.id, cellbuilder.build_distrib_cell((1, len(self.all_types)+1),self,  name="distrib_" + t.id))  # one special output for - nochild
-                    setattr(self, 'infl_' + t.id, cellbuilder.build_node_inflater(t, self, name="inflater_" + t.id))
+                    setattr(self, 'dist_' + t.id, cellsbuilder.build_distrib_cell((1, len(self.all_types) + 1), self, name="distrib_" + t.id))  # one special output for - nochild
+                    setattr(self, 'infl_' + t.id, cellsbuilder.build_node_inflater(t, self, name="inflater_" + t.id))
 
             if t.value_type is not None:
-                setattr(self, 'value_'+t.id, cellbuilder.build_value_inflater(t, self, name='value_'+t.id))
+                setattr(self, 'value_' + t.id, cellsbuilder.build_value_inflater(t, self, name='value_' + t.id))
 
     def __call__(self, *,
                  encodings: tf.Tensor = None, targets: T.List[Tree] = None,     # this two lines are mutual exclusive

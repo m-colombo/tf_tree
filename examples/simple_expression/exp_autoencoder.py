@@ -26,7 +26,7 @@ def main(argv=None):
             tf.logging.warn("Deleting old log directory at {}".format(FLAGS.model_dir))
             tf.gfile.DeleteRecursively(FLAGS.model_dir)
             tf.gfile.MakeDirs(FLAGS.model_dir)
-        elif not FLAGS.restore:
+        else:
             raise ValueError("Log dir already exists!")
     else:
         tf.gfile.MakeDirs(FLAGS.model_dir)
@@ -35,18 +35,8 @@ def main(argv=None):
     summary_writer.set_as_default()
     print("Summaries in " + FLAGS.model_dir)
 
-    if not FLAGS.restore:
-        with open(os.path.join(FLAGS.model_dir, "flags.json"), 'w') as f:
-            json.dump(FLAGS.flag_values_dict(), f)
-    else:
-        with open(os.path.join(FLAGS.model_dir, "flags.json")) as f:
-            info = json.load(f)
-            override_flags = ["embedding_size", "activation", "hidden_cell_coef",
-                              "fixed_arity", "max_arity", "cut_arity", "max_node_count",
-                              "enc_variable_arity_strategy", "dec_variable_arity_strategy",
-                              "encoder_gate", "decoder_gate"]
-        for f in override_flags:
-            setattr(FLAGS, f, info[f])
+    with open(os.path.join(FLAGS.model_dir, "flags.json"), 'w') as f:
+        json.dump(FLAGS.flag_values_dict(), f)
 
     #########
     # DATA
@@ -72,7 +62,8 @@ def main(argv=None):
                       variable_arity_strategy=FLAGS.enc_variable_arity_strategy,
                       cellsbuilder=EncoderCellsBuilder(
                             EncoderCellsBuilder.simple_cell_builder(hidden_coef=FLAGS.hidden_cell_coef,
-                                                                    activation=activation, gate=FLAGS.encoder_gate),
+                                                                    activation=activation,
+                                                                    gate=FLAGS.encoder_gate),
                             EncoderCellsBuilder.simple_dense_embedder_builder(activation=activation),
                             EncoderCellsBuilder.simple_categorical_merger_builder(hidden_coef=FLAGS.hidden_cell_coef,
                                                                                   activation=activation)),
@@ -84,9 +75,11 @@ def main(argv=None):
                       max_depth=FLAGS.max_depth,
                       max_arity=FLAGS.max_arity,
                       cut_arity=FLAGS.cut_arity,
-                      cellbuilder=DecoderCellsBuilder(
-                          DecoderCellsBuilder.simple_distrib_cell_builder(FLAGS.hidden_cell_coef, activation=activation),
-                          DecoderCellsBuilder.simple_1ofk_value_inflater_builder(0.5, activation=tf.tanh),
+                      cellsbuilder=DecoderCellsBuilder(
+                          DecoderCellsBuilder.simple_distrib_cell_builder(FLAGS.hidden_cell_coef,
+                                                                          activation=activation),
+                          DecoderCellsBuilder.simple_1ofk_value_inflater_builder(FLAGS.hidden_cell_coef,
+                                                                                 activation=tf.tanh),
                           DecoderCellsBuilder.simple_node_inflater_builder(FLAGS.hidden_cell_coef,
                                                                            activation=activation,
                                                                            gate=FLAGS.decoder_gate)),

@@ -81,11 +81,6 @@ def define_common_flags():
         help="Directory to put the model summaries, parameters and checkpoint.")
 
     tf.flags.DEFINE_boolean(
-        "restore",
-        default=False,
-        help="Whether to restore a previously saved model")
-
-    tf.flags.DEFINE_boolean(
         "overwrite",
         default=False,
         help="Whether to overwrite existing model directory")
