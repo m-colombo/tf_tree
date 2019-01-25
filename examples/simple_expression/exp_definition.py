@@ -23,6 +23,18 @@ def create_num_value(min_value, max_value):
     return NumValue
 
 
+class OpValue(NodeDefinition.Value):
+
+    @staticmethod
+    def representation_to_abstract_batch(t: tf.Tensor):
+        ops = ['+', '-']
+        return ops[(tf.argmax(t, axis=-1)).numpy()[0]]
+
+    @staticmethod
+    def abstract_to_representation_batch(v: T.List[T.Any]):
+        return tf.one_hot(list(map(lambda x: 0 if x == '+' else 1, v)), 2, axis=-1)
+
+
 class BinaryExpressionTreeGen:
     def __init__(self, min_value, max_value):
 
@@ -79,6 +91,66 @@ class BinaryExpressionTreeGen:
         elif et.node_type_id == 'sub_bin':
             return self.evaluate(et.children[0]) - self.evaluate(et.children[1])
         elif et.node_type_id == 'add_bin':
+            return self.evaluate(et.children[0]) + self.evaluate(et.children[1])
+
+
+class LabelledBinaryExpressionTreeGen:
+
+    def __init__(self, min_value, max_value):
+
+        if min_value < 0 or min_value >= max_value:
+            raise ValueError()
+
+        self.NumValue = create_num_value(min_value, max_value)
+
+        self.tree_def = TreeDefinition(
+            node_types=[
+                NodeDefinition("op_bin", may_root=True, arity=NodeDefinition.FixedArity(2), value_type=self.OpValue),
+                NodeDefinition("num_value", may_root=True, arity=NodeDefinition.FixedArity(0), value_type=self.NumValue)
+
+            ])
+
+        self.leaf_values = list(range(min_value, max_value+1))
+        self.node_types = self.tree_def.node_types
+
+    def generate(self, max_depth):
+        """Generate a random arithmetic expression tree, using just binary plus and minus
+            Args:
+                max_depth: integer > 0
+            Returns:
+                expression tree where leaves are int.
+        """
+
+        if max_depth == 1:  # recursion base case
+            v = random.sample(self.leaf_values, 1)[0]
+            return Tree(node_type_id='num_value', value=self.NumValue(abstract_value=v))
+
+        elif max_depth > 1:
+            types = self.node_types
+            node_type = random.sample(types, 1)[0]
+
+            if node_type.id == 'num_value':
+                return self.generate(1)
+
+            else:
+                o = random.sample(['+', '-'], 1)[0]
+                return Tree(node_type.id, children=[
+                    self.generate(max_depth - 1),
+                    self.generate(max_depth - 1)], value=self.OpValue(abstract_value=o))
+
+    def evaluate(self, et):
+        """Evaluate the result of the arithmetic expression
+            Args:
+                et: expression tree
+            Returns:
+                an integer, the result
+        """
+
+        if et.node_type_id == 'num_value':
+            return et.value.abstract_value
+        elif et.node_type_id == 'op_bin' and et.value.abstract_value == '-':
+            return self.evaluate(et.children[0]) - self.evaluate(et.children[1])
+        elif et.node_type_id == 'op_bin' and et.value.abstract_value == '+':
             return self.evaluate(et.children[0]) + self.evaluate(et.children[1])
 
 
