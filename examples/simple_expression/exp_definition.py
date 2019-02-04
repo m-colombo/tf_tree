@@ -4,21 +4,21 @@ import tensorflow as tf
 import typing as T
 
 
-def create_num_value(min_value, max_value):
-    """Build a Value class that handle numbers in [min_value, max_value] encoded as 1ofk"""
+def create_num_value(max_value):
+    """Build a Value class that handle numbers in [0, max_value] encoded as 1ofk"""
 
-    size = max_value - min_value + 1
+    size = max_value + 1
 
     class NumValue(NodeDefinition.Value):
         representation_shape = size
 
         @staticmethod
         def representation_to_abstract_batch(t: tf.Tensor):
-            return (tf.argmax(t, axis=-1) + min_value).numpy()
+            return (tf.argmax(t, axis=-1)).numpy()
 
         @staticmethod
         def abstract_to_representation_batch(v: T.List[T.Any]):
-            return tf.one_hot(list(map(lambda x: x - min_value, v)), size, axis=-1)
+            return tf.one_hot(v, size, axis=-1)
 
     return NumValue
 
@@ -36,12 +36,9 @@ class OpValue(NodeDefinition.Value):
 
 
 class BinaryExpressionTreeGen:
-    def __init__(self, min_value, max_value):
+    def __init__(self, max_value):
 
-        if min_value < 0 or min_value >= max_value:
-            raise ValueError()
-
-        self.NumValue = create_num_value(min_value, max_value)
+        self.NumValue = create_num_value(max_value)
 
         self.tree_def = TreeDefinition(
             node_types=[
@@ -51,7 +48,7 @@ class BinaryExpressionTreeGen:
 
             ])
 
-        self.leaf_values = list(range(min_value, max_value+1))
+        self.leaf_values = list(range(0, max_value+1))
         self.node_types = self.tree_def.node_types
 
     def generate(self, max_depth):
@@ -96,8 +93,9 @@ class BinaryExpressionTreeGen:
 
 class LabelledBinaryExpressionTreeGen(BinaryExpressionTreeGen):
 
-    def __init__(self, min_value, max_value):
-        super(LabelledBinaryExpressionTreeGen, self).__init__(min_value, max_value)
+    def __init__(self, max_value):
+
+        self.NumValue = create_num_value(max_value)
 
         self.tree_def = TreeDefinition(
             node_types=[
@@ -131,7 +129,7 @@ class LabelledBinaryExpressionTreeGen(BinaryExpressionTreeGen):
                 o = random.sample(['+', '-'], 1)[0]
                 return Tree(node_type.id, children=[
                     self.generate(max_depth - 1),
-                    self.generate(max_depth - 1)], value=self.OpValue(abstract_value=o))
+                    self.generate(max_depth - 1)], value=OpValue(abstract_value=o))
 
     def evaluate(self, et):
         """Evaluate the result of the arithmetic expression
@@ -150,8 +148,8 @@ class LabelledBinaryExpressionTreeGen(BinaryExpressionTreeGen):
 
 
 class NaryExpressionTreeGen(BinaryExpressionTreeGen):
-    def __init__(self, min_value, max_value, max_arity):
-        super(NaryExpressionTreeGen, self).__init__(min_value, max_value)
+    def __init__(self, max_value, max_arity):
+        super(NaryExpressionTreeGen, self).__init__(max_value)
 
         self.tree_def = TreeDefinition(
             node_types=[
@@ -164,6 +162,7 @@ class NaryExpressionTreeGen(BinaryExpressionTreeGen):
                                value_type=self.NumValue)
             ]
         )
+
         self.node_types = self.tree_def.node_types
 
     def generate(self, max_depth):
