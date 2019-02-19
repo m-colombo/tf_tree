@@ -29,7 +29,8 @@ class DecoderCellsBuilder:
         self._node_inflater_builder = node_inflater_builder
 
     def build_distrib_cell(self, output_size: (int, int), decoder: "Decoder", name=None) -> tf.keras.Model:
-        """Build a distribution cell that given an embedding returns a output_size[0] concatenated probability vector of size output_size[1]"""
+        """Build a distribution cell that given an embedding returns a output_size[0] concatenated unscaled probability vector of size output_size[1].
+        They'll be used with tf..nn.softmax_cross_entropy"""
         m = self._distrib_builder(output_size, decoder, name)
         # setattr(m, 'compiled_call', tf.contrib.eager.defun(m))   # it's actually slower
         setattr(m, 'compiled_call', m.__call__)
@@ -60,6 +61,7 @@ class DecoderCellsBuilder:
 
     @staticmethod
     def simple_distrib_cell_builder(hidden_coef, activation=tf.nn.relu):
+        """Unscaled output. Needed to compute `tf.nn.sparse_softmax_with_logits` """
         def f(output_size: (int, int), decoder: Decoder, name=None):
             total_output_size = output_size[0] * output_size[1]
 
@@ -70,8 +72,7 @@ class DecoderCellsBuilder:
                 tf.keras.layers.Dense(300, activation=activation),
                 # tf.keras.layers.Dense(200, activation=activation),
                 tf.keras.layers.Dense(output_size[0] * output_size[1]),
-                tf.keras.layers.Lambda(lambda x: tf.reshape(x, [-1, output_size[1]]), output_shape=(output_size[1],)),
-                tf.keras.layers.Softmax()
+                tf.keras.layers.Lambda(lambda x: tf.reshape(x, [-1, output_size[1]]), output_shape=(output_size[1],))
             ], name=name)
         return f
 
@@ -235,13 +236,12 @@ class Decoder(tf.keras.Model):
         if TR:
             node_idx = [self.root_types_idx[t.node_type_id] for t in batch.target_trees]
 
-            distribs_gt = tf.one_hot(node_idx, len(self.all_types)+1)
             vals = list(map(lambda t: t.value, batch.target_trees))
 
             pad = len(self.all_types) + 1 - len(self.root_types)
 
-            batch.stack_to('distribs', tf.pad(distribs, [[0, 0], [0, pad]]))
-            batch.stack_to('distribs_gt', distribs_gt)
+            batch.stack_to('distribs_unscaled', tf.pad(distribs, [[0, 0], [0, pad]], constant_values=float('-inf')))
+            batch.stack_to('distribs_idx', node_idx)
 
         else:
             node_idx = list(tf.argmax(distribs, axis=1))
@@ -341,8 +341,8 @@ class Decoder(tf.keras.Model):
 
                     if TR:
                         batch.scatter_update('embs', [c.meta['node_numb'] for o in ops for c in o.meta['target'].children], all_embeddings)
-                        batch.stack_to('distribs', tf.pad(all_children_distribs, [[0, 0], [0, 1]]))
-                        batch.stack_to('distribs_gt', oh_distrib_)
+                        batch.stack_to('distribs_unscaled', tf.pad(all_children_distribs, [[0, 0], [0, 1]], constant_values=float('-inf')))
+                        batch.stack_to('distribs_idx', node_idx)
                     else:
                         new_indexes = batch.add_rows('embs', all_embeddings)
 
@@ -401,11 +401,9 @@ class Decoder(tf.keras.Model):
                     # node_idx = list(tf_random_choice_idx(distribs).numpy())
                     node_idx = list(tf.argmax(distribs, axis=1))
 
-                distribs_oh = tf.one_hot(node_idx, len(self.all_types) + 1)
-
                 if TR:
-                    batch.stack_to('distribs', distribs)
-                    batch.stack_to('distribs_gt', distribs_oh)
+                    batch.stack_to('distribs_unscaled', distribs)
+                    batch.stack_to('distribs_idx', node_idx)
 
                 # avoid computing those exceeding maximum arity
                 no_child_mask = tf.equal(node_idx, no_child_idx)
@@ -415,7 +413,7 @@ class Decoder(tf.keras.Model):
                 inp = tf.boolean_mask(inp, mask, axis=0)   # remove terminated computations
 
                 if inp.shape[0].value > 0:  # otherwise means no more children have to be generated
-
+                    distribs_oh = tf.one_hot(node_idx, len(self.all_types) + 1)
                     inp = tf.concat([inp, tf.boolean_mask(distribs_oh, mask, axis=0)], axis=1)
                     embs = infl.compiled_call(inp)    # compute the new embedding
 
@@ -489,8 +487,6 @@ class Decoder(tf.keras.Model):
                     extra_dst = getattr(self, 'extra_dist_' + node_type.id)
                     extra_infl = getattr(self, 'extra_infl_' + node_type.id)
 
-
-
                     children_1ofk = tf.tile(tf.diag(tf.ones(n)), [batch_size, 1])
                     tiled_embs = tf.tile(tf.expand_dims(inp, axis=1), [1, n, 1])
                     extra_inp = tf.concat([tf.reshape(tiled_embs, [batch_size * n, -1]), children_1ofk], axis=1)
@@ -505,26 +501,24 @@ class Decoder(tf.keras.Model):
                             [batch_size * self.max_arity, len(self.all_types)+1])
                     elif TR:
                         # train to not generate children
-                        batch.stack_to('distribs', extra_distrib)
-                        batch.stack_to('distribs_gt', tf.one_hot([no_child_idx] * extra_distrib.shape[0].value, len(self.all_types)+1))
+                        batch.stack_to('distribs_unscaled', extra_distrib)
+                        batch.stack_to('distribs_idx', [no_child_idx] * extra_distrib.shape[0].value)
 
                 if TR:
                     # assuming no empty interleaving children - all stacked to the left
                     node_idx = [self.all_types_idx[o.meta['target'].children[c].node_type_id] if len(o.meta['target'].children) > c
                                 else no_child_idx
                                 for o in ops for c in range(self.max_arity if EXTRA_CHILD else self.cut_arity)]
+
+                    batch.stack_to('distribs_unscaled', distribs)
+                    batch.stack_to('distribs_idx', node_idx)
                 else:
                     # node_idx = list(tf_random_choice_idx(distribs).numpy())
                     node_idx = list(tf.argmax(distribs, axis=1).numpy())
 
-                distrib_gt = tf.one_hot(node_idx, len(self.all_types)+1)
-
-                if TR:
-                    batch.stack_to('distribs', distribs)
-                    batch.stack_to('distribs_gt', distrib_gt)
-
                 # TODO check all the one_hot, are not differentiable!!
 
+                distrib_gt = tf.one_hot(node_idx, len(self.all_types)+1)
                 distrib_gt = tf.reshape(distrib_gt, [batch_size, self.max_arity if EXTRA_CHILD else self.cut_arity, len(self.all_types)+1])
 
                 first_distribs_gt = tf.reshape(distrib_gt[:, :self.cut_arity], [batch_size, -1])

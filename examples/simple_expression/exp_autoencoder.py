@@ -43,9 +43,9 @@ def main(argv=None):
     #########
 
     if FLAGS.fixed_arity:
-        tree_gen = BinaryExpressionTreeGen(0, 9)
+        tree_gen = BinaryExpressionTreeGen(9)
     else:
-        tree_gen = NaryExpressionTreeGen(0, 9, FLAGS.max_arity)
+        tree_gen = NaryExpressionTreeGen(9, FLAGS.max_arity)
 
     def get_batch():
         return [tree_gen.generate(FLAGS.max_depth) for _ in range(FLAGS.batch_size)]

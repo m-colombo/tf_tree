@@ -126,8 +126,8 @@ class BatchOfTreesForDecoding(BatchOfTrees):
             # more over some are not associated to a real node, artificial nodes used to train the model
             # to -not- generate a node (special no-child/no-node)
 
-            self.distribs = []
-            self.distribs_gt = []
+            self.distribs_unscaled = []
+            self.distribs_idx = []
 
             for nt in tree_def.node_types:
                 if nt.value_type is not None:
@@ -197,15 +197,19 @@ class BatchOfTreesForDecoding(BatchOfTrees):
 
         list(map(gather, self.decoded_trees))
 
-        sample_error = tf.square(self.get_stacked('distribs') - self.get_stacked('distribs_gt'))
-        d_loss = tf.reduce_mean(tf.reduce_sum(sample_error, axis=1))
+        sample_distrib_error = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            labels=self.get_stacked('distribs_idx'),
+            logits=self.get_stacked('distribs_unscaled')
+        )
+
+        d_loss = tf.reduce_mean(sample_distrib_error)
 
         v_loss = 0
         for k in value.keys():
             if len(value[k]) > 0 and k not in ignore_values:
                 all_value_gt = self.tree_def.id_map[k].value_type.abstract_to_representation_batch(value_gt[k])
                 all_value_gen = tf.gather(self['vals_'+k], value[k])
-                v_loss += tf.reduce_mean(tf.reduce_mean(tf.square(all_value_gen - all_value_gt), axis=1))
+                v_loss += tf.reduce_mean(tf.reduce_mean(tf.square(all_value_gen - all_value_gt), axis=1)) # TODO for some value cross entropy ?
 
         return d_loss, v_loss
 
