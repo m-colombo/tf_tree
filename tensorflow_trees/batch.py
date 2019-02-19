@@ -182,7 +182,6 @@ class BatchOfTreesForDecoding(BatchOfTrees):
 
         return list(map(lambda l: value_t.representation_to_abstract_batch(l), leaves[:4]))
 
-
     def reconstruction_loss(self, ignore_values={}):
 
         value_gt = {nt.id: [] for nt in self.tree_def.node_types if nt.value_type is not None}
@@ -207,9 +206,17 @@ class BatchOfTreesForDecoding(BatchOfTrees):
         v_loss = 0
         for k in value.keys():
             if len(value[k]) > 0 and k not in ignore_values:
-                all_value_gt = self.tree_def.id_map[k].value_type.abstract_to_representation_batch(value_gt[k])
-                all_value_gen = tf.gather(self['vals_'+k], value[k])
-                v_loss += tf.reduce_mean(tf.reduce_mean(tf.square(all_value_gen - all_value_gt), axis=1)) # TODO for some value cross entropy ?
+                vt = self.tree_def.id_map[k].value_type
+                all_value_gt = vt.abstract_to_representation_batch(value_gt[k])
+                all_value_gen = tf.gather(self['vals_' + k], value[k])
+                if vt.class_value:
+                    vk_loss = tf.nn.softmax_cross_entropy_with_logits_v2(
+                        labels=all_value_gt,
+                        logits=all_value_gen)
+                else:
+                    vk_loss = tf.square(all_value_gen - all_value_gt)
+
+                v_loss += tf.reduce_mean(vk_loss, axis=-1)   # TODO handle the mixing of losses from different domain (i.e. properly weight them)
 
         return d_loss, v_loss
 

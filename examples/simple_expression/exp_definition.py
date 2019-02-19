@@ -11,6 +11,7 @@ def create_num_value(max_value):
 
     class NumValue(NodeDefinition.Value):
         representation_shape = size
+        class_value = True
 
         @staticmethod
         def representation_to_abstract_batch(t: tf.Tensor):
@@ -24,6 +25,8 @@ def create_num_value(max_value):
 
 
 class OpValue(NodeDefinition.Value):
+    representation_shape = 2
+    class_value = True
 
     @staticmethod
     def representation_to_abstract_batch(t: tf.Tensor):

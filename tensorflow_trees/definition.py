@@ -134,6 +134,9 @@ class NodeDefinition:
     class Value:
         representation_shape = None
 
+        # whether the this are classification values, i.e. one hot encoded. In such a case cross entropy will be used
+        class_value = False
+
         def __init__(self, abstract_value=None, representation=None):
             """
 

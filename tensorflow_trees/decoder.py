@@ -14,18 +14,21 @@ class DecoderCellsBuilder:
            - Node infl. : from parent embedding generates children embeddings (actual shapes depends on node arity)
        """
 
-    def __init__(self,
+    def __init__(self, *,
                  distrib_builder: T.Callable[[T.Tuple[int, int], T.Optional[str]], tf.keras.Model],
-                 value_inflater_builder: T.Callable[[NodeDefinition, T.Optional[str]], tf.keras.Model],
+                 dense_value_inflater_builder: T.Callable[[NodeDefinition, T.Optional[str]], tf.keras.Model],
+                 categorical_value_inflater_builder: T.Callable[[NodeDefinition, T.Optional[str]], tf.keras.Model],
                  node_inflater_builder: T.Callable[[NodeDefinition, "Decoder", T.Optional[str]], tf.keras.Model]):
         """Simple implementation which just use callables, avoiding superfluous inheritance
 
         :param distrib_builder: see self.build_distrib_cell
-        :param value_inflater_builder: see self.build_value_inflater
+        :param dense_value_inflater_builder: see self.build_value_inflater
+        :param categorical_value_inflater_builder: see self.build_value_inflater
         :param node_inflater_builder: see self.build_node_inflater
         """
         self._distrib_builder = distrib_builder
-        self._value_inflater_builder = value_inflater_builder
+        self._dense_value_inflater_builder = dense_value_inflater_builder
+        self._categorical_value_inflater_builder = categorical_value_inflater_builder
         self._node_inflater_builder = node_inflater_builder
 
     def build_distrib_cell(self, output_size: (int, int), decoder: "Decoder", name=None) -> tf.keras.Model:
@@ -37,8 +40,13 @@ class DecoderCellsBuilder:
         return m
 
     def build_value_inflater(self, node_def: NodeDefinition, decoder: "Decoder", name=None) -> tf.keras.Model:
-        """Build a cell that projects an embedding in the node value space"""
-        m = self._value_inflater_builder(node_def, decoder, name)
+        """Build a cell that projects an embedding in the node value space.
+        Categorical values will be inflated in unscaled logits, in order to use tf.nn.softmax_crossentropy"""
+        if node_def.value_type.class_value:
+            m = self._categorical_value_inflater_builder(node_def, decoder, name)
+        else:
+            m = self._dense_value_inflater_builder(node_def, decoder, name)
+
         # setattr(m, 'compiled_call', tf.contrib.eager.defun(m))   # it's actually slower
         setattr(m, 'compiled_call', m.__call__)
         return m
@@ -108,14 +116,14 @@ class DecoderCellsBuilder:
 
     @staticmethod
     def simple_1ofk_value_inflater_builder(hidden_coef, activation=tf.nn.relu):
+        """Unscaled output. Needed to compute `tf.nn.sparse_softmax_with_logits` """
         def f(node_def: NodeDefinition, decoder: "Decoder", name=None):
             size1 = int((node_def.value_type.representation_shape + decoder.embedding_size) * hidden_coef)
             size2 = int((size1 + decoder.embedding_size) * hidden_coef)
             return tf.keras.Sequential([
                 tf.keras.layers.Dense(2*size1, activation=activation),
                 # tf.keras.layers.Dense(size2, activation=activation),
-                tf.keras.layers.Dense(node_def.value_type.representation_shape),
-                tf.keras.layers.Softmax()
+                tf.keras.layers.Dense(node_def.value_type.representation_shape)
             ], name=name)
         return f
 

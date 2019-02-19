@@ -76,13 +76,17 @@ def main(argv=None):
                       max_arity=FLAGS.max_arity,
                       cut_arity=FLAGS.cut_arity,
                       cellsbuilder=DecoderCellsBuilder(
+                          distrib_builder=
                           DecoderCellsBuilder.simple_distrib_cell_builder(FLAGS.hidden_cell_coef,
-                                                                          activation=activation),
+                                                                            activation=activation),
+                          categorical_value_inflater_builder=
                           DecoderCellsBuilder.simple_1ofk_value_inflater_builder(FLAGS.hidden_cell_coef,
-                                                                                 activation=tf.tanh),
-                          DecoderCellsBuilder.simple_node_inflater_builder(FLAGS.hidden_cell_coef,
-                                                                           activation=activation,
-                                                                           gate=FLAGS.decoder_gate)),
+                                                                                   activation=tf.tanh),
+                          dense_value_inflater_builder=None,    # unused
+                          node_inflater_builder=
+                            DecoderCellsBuilder.simple_node_inflater_builder(FLAGS.hidden_cell_coef,
+                                                                             activation=activation,
+                                                                             gate=FLAGS.decoder_gate)),
                       variable_arity_strategy=FLAGS.dec_variable_arity_strategy)
 
     ###########
