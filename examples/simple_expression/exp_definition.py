@@ -207,8 +207,8 @@ class NaryExpressionTreeGen(BinaryExpressionTreeGen):
 
 
 class LabelledNaryExpressionTreeGen(NaryExpressionTreeGen):
-    def __init__(self, min_value, max_value, max_arity):
-        super(LabelledNaryExpressionTreeGen, self).__init__(min_value, max_value, max_arity)
+    def __init__(self, max_value, max_arity):
+        super(LabelledNaryExpressionTreeGen, self).__init__(max_value, max_arity)
 
         self.tree_def = TreeDefinition(
             node_types=[
