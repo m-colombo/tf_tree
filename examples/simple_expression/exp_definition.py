@@ -97,7 +97,7 @@ class BinaryExpressionTreeGen:
 class LabelledBinaryExpressionTreeGen(BinaryExpressionTreeGen):
 
     def __init__(self, max_value):
-
+        super(LabelledBinaryExpressionTreeGen, self).__init__(max_value)
         self.NumValue = create_num_value(max_value)
 
         self.tree_def = TreeDefinition(
