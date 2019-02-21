@@ -3,7 +3,7 @@ import typing as T
 
 from tensorflow_trees.definition import TreeDefinition, Tree, NodeDefinition
 from tensorflow_trees.batch import BatchOfTreesForEncoding
-from tensorflow_trees.encoder_cells import GatedFixedArityNodeEmbedder, GatedNullableInput, GatedValueMerger, NullableInputDenseLayer
+from tensorflow_trees.encoder_cells import GatedFixedArityNodeEmbedder, GatedNullableInput, NullableInputDenseLayer
 
 
 class EncoderCellsBuilder:
@@ -15,23 +15,20 @@ class EncoderCellsBuilder:
 
     def __init__(self,
                  cell_builder: T.Callable[[NodeDefinition, "Encoder", T.Union[str, None]], tf.keras.Model],
-                 embedder_builder: T.Callable[[NodeDefinition, int, T.Union[str, None]], tf.keras.Model],
-                 merger_builder: T.Callable[[NodeDefinition, int, T.Union[str, None]], tf.keras.Model]):
+                 embedder_builder: T.Callable[[NodeDefinition, int, T.Union[str, None]], tf.keras.Model]):
         """Simple implementation which just use callables, avoiding superfluous inheritance
 
         :param cell_builder: see CellsBuilder.build_cell doc
         :param embedder_builder: see CellsBuilder.build_embedder doc
-        :param merger_builder: see CellsBuilder.build_merger doc
         """
         self._cell_builder = cell_builder
         self._embedder_builder = embedder_builder
-        self._merger_builder = merger_builder
 
     def build_cell(self, parent_def: NodeDefinition, encoder: "Encoder", name=None) -> tf.keras.Model:
         """A cell is something that merge children embeddings into the parent embedding.
         Actual input shape shape depends from parent arity.
-            - Fixed arity: input size = total children * embedding_size
-            - Variable arity: input_size = 2 * embedding_size """
+            - Fixed arity: input size = [total children * embedding_size, parent value size]
+            - Variable arity: input_size = [2 * embedding_size, parent value size] """
 
         m = self._cell_builder(parent_def, encoder, name)
         if type(m) == tuple:
@@ -47,13 +44,6 @@ class EncoderCellsBuilder:
     def build_embedder(self, leaf_def: NodeDefinition, embedding_size: int, name=None):
         """An embedder is something that projects leaf value into the embedding space"""
         m = self._embedder_builder(leaf_def, embedding_size, name)
-        # setattr(m, 'optimized_call', tf.contrib.eager.defun(m))   # it's actually slower
-        setattr(m, 'optimized_call', m)
-        return m
-
-    def build_merger(self, node_def: NodeDefinition, embedding_size: int, name=None):
-        """A merger is something that take a node value, its embedding and merge them into a single embedding"""
-        m = self._merger_builder(node_def, embedding_size, name)
         # setattr(m, 'optimized_call', tf.contrib.eager.defun(m))   # it's actually slower
         setattr(m, 'optimized_call', m)
         return m
@@ -83,40 +73,28 @@ class EncoderCellsBuilder:
         return f
 
     @staticmethod
-    def simple_categorical_merger_builder(hidden_coef, activation=tf.nn.leaky_relu):
-        """
-        """
-        def f(node_def: NodeDefinition, embedding_size, name=None):
-            input_size = embedding_size + node_def.value_type.representation_shape
-            # return GatedValueMerger(activation=activation, embedding_size=embedding_size, hidden_coef=hidden_coef, name=name)
-            return tf.keras.Sequential([
-                tf.keras.layers.Dense(int((input_size + embedding_size) * hidden_coef),
-                                      activation=activation,
-                                      input_shape=(input_size,),
-                                      name=name + '/1'),
-                tf.keras.layers.Dense(embedding_size,
-                                      activation=activation,
-                                      name=name + "/2")])
-        return f
-
-    @staticmethod
     def simple_cell_builder(hidden_coef, activation=tf.nn.leaky_relu, gate=True):
         def f(node_def: NodeDefinition, encoder: 'Encoder', name=None):
             if type(node_def.arity) == node_def.VariableArity:
                 if not encoder.use_flat_strategy:
                     # TODO use rnn/lstm
-                    input_shape = (encoder.embedding_size*2,)
+                    input_shape = (encoder.embedding_size*2 +
+                                   node_def.value_type.representation_shape if node_def.value_type is not None else 0,)
+
                     if gate:
                         return GatedFixedArityNodeEmbedder(activation=activation, hidden_coef=hidden_coef, embedding_size=encoder.embedding_size, arity=2)
                 else:
+                    # +1 1 is the summarization of extra children
+                    input_size = encoder.embedding_size * (encoder.cut_arity + 1) +\
+                                 node_def.value_type.representation_shape if node_def.value_type is not None else 0
                     output_model_builder = lambda :tf.keras.Sequential([
-                        NullableInputDenseLayer(input_size=encoder.embedding_size * (encoder.cut_arity + 1),  # 1 is the summarization of extra children
+                        NullableInputDenseLayer(input_size=input_size,
                                                 hidden_activation=activation, hidden_size=encoder.embedding_size * int(encoder.cut_arity**hidden_coef)),
                         tf.keras.layers.Dense(encoder.embedding_size, activation=activation)
                     ], name=name)
 
                     return GatedNullableInput(output_model_builder=output_model_builder,
-                                              input_size=encoder.embedding_size * (encoder.cut_arity + 1),
+                                              maximum_input_size=input_size,
                                               embedding_size=encoder.embedding_size,
                                               name=name) if gate else output_model_builder(),\
                             tf.keras.Sequential([
@@ -131,17 +109,18 @@ class EncoderCellsBuilder:
                     return GatedFixedArityNodeEmbedder(activation=activation, hidden_coef=hidden_coef, embedding_size=encoder.embedding_size, arity=node_def.arity.value)
                 else:
                     return tf.keras.Sequential([
-                        tf.keras.layers.Dense(int((encoder.embedding_size) * hidden_coef),
+                        tf.keras.layers.Concatenate(-1),    # concatenate children embeddings and value
+                        tf.keras.layers.Dense(int((encoder.embedding_size) * hidden_coef * node_def.arity.value),
                                               activation=activation, name='/1'),
                         tf.keras.layers.Dense(encoder.embedding_size, activation=activation, name='/2')
                     ])
 
             return tf.keras.Sequential([
+                tf.keras.layers.Concatenate(-1),
                 tf.keras.layers.Dense(int((input_shape[0] + encoder.embedding_size) * hidden_coef), activation=activation, input_shape=input_shape, name=name+'/1'),
                 tf.keras.layers.Dense(encoder.embedding_size, activation=activation, name=name+'/2')
             ])
         return f
-
 
 
 class Encoder(tf.keras.Model):
@@ -176,39 +155,29 @@ class Encoder(tf.keras.Model):
             elif not (type(t.arity) == t.FixedArity and t.arity.value == 0):
                 setattr(self, 'C_'+t.id, cellsbuilder.build_cell(t, self, name=name+"C_" + t.id))
 
-            if t.value_type is not None:
-                setattr(self, 'M_' + t.id, cellsbuilder.build_merger(t, embedding_size, name=name+"M_" + t.id))
-
         for l in tree_def.leaves_types:
             setattr(self, 'E_'+l.id, cellsbuilder.build_embedder(l, embedding_size, name=name+"E_" + l.id))
 
-
-    def _c_fixed_op(self, inp, node_id, ops, network):
+    def _c_fixed_op(self, inp, ops, network):
 
         res = network.optimized_call(inp)
 
-        if self.node_map[node_id].value_type is None:
+        ops[0].meta['emb_batch'].scatter_update('embs', [op.meta['node_numb'] for op in ops], res)
+        for op in ops:
+            op.meta['computed'] = True
 
-            ops[0].meta['emb_batch'].scatter_update('embs', [op.meta['node_numb'] for op in ops], res)
-            for op in ops:
-                op.meta['computed'] = True
-
-        # compute merging with value straight on - input already in place
+    @staticmethod
+    def augment_with_value(inp, node_t, ops):
+        """ Add node value to input (if present) in order to embed it as well
+            :param inp: previous input
+            :param node_t: node type
+            :param ops: operations
+        """
+        if node_t.value_type is not None:
+            values = node_t.value_type.abstract_to_representation_batch([x.value.abstract_value for x in ops])
+            return tf.tuple([inp, values])
         else:
-            values = self.node_map[node_id].value_type.abstract_to_representation_batch([x.value.abstract_value for x in ops])
-            self._m_op(res, values, getattr(self, 'M_'+node_id), ops)
-
-        # recursive fused call is ignored - not useful in our use cases
-
-    def _m_op(self, embs, values, network, ops):
-
-            inp = tf.concat([embs, values], axis=-1)
-            res = network.optimized_call(inp)
-
-            ops[0].meta['emb_batch'].scatter_update('embs', [op.meta['node_numb'] for op in ops], res)
-
-            for op in ops:
-                op.meta['computed'] = True
+            return tf.tuple([inp, tf.zeros([inp.shape[0], 0])])
 
     def __call__(self, batch: T.Union[BatchOfTreesForEncoding, T.List[Tree]]) -> BatchOfTreesForEncoding:
 
@@ -269,29 +238,32 @@ class Encoder(tf.keras.Model):
                 else:
                     rec_ops = [o.meta['parent'] for o in ops]
                     network = getattr(self, 'C_'+ops[0].meta['parent'].node_type_id)
-                    self._c_fixed_op(res, ops[0].meta['parent'].node_type_id, rec_ops, network)
+                    self._c_fixed_op(res, rec_ops, network)
 
-            elif op_t == 'M':
-                    values = node_t.value_type.abstract_to_representation_batch([x.value.abstract_value for x in ops])
-                    embs = tf.gather(batch['embs'], [x.meta['node_numb'] for x in ops])
-                    self._m_op(embs, values, network, ops)
+            # elif op_t == 'M':
+            #         values = node_t.value_type.abstract_to_representation_batch([x.value.abstract_value for x in ops])
+            #         embs = tf.gather(batch['embs'], [x.meta['node_numb'] for x in ops])
+            #         self._m_op(embs, values, network, ops)
 
             elif op_t == 'C':
                 if type(node_t.arity) == NodeDefinition.FixedArity:
                     inp = tf.gather(batch['embs'], [c.meta['node_numb'] for op in ops for c in op.children])
-                    inp_1 = tf.reshape(inp, [len(ops), -1])
-                    self._c_fixed_op(inp_1, node_id, ops, network)
+                    inp = tf.reshape(inp, [len(ops), -1])
+                    inp, values = self.augment_with_value(inp, node_t, ops)
+
+                    self._c_fixed_op([inp, values], ops, network)
 
                 elif type(node_t.arity) == NodeDefinition.VariableArity and not self.use_flat_strategy:
                     # TODO rnn (e.g. lstm) ?
-
                     idx = tf.cast(tf.reshape([[o.meta['node_numb'], o.children[o.meta.get('next_child', 0)].meta['node_numb']]
                                               for o in ops], [-1]), tf.int64)
 
                     inp = tf.gather(batch['embs'], idx)
 
                     inp = tf.reshape(inp, [len(ops), -1])
-                    res = network.optimized_call(inp)
+                    inp, values = self.augment_with_value(inp, node_t, ops) # TODO test
+
+                    res = network.optimized_call([inp, values])
 
                     k = ('C', node_id)
                     if k not in all_ops.keys():
@@ -346,19 +318,15 @@ class Encoder(tf.keras.Model):
                     inp = tf.gather(batch['embs'], tf.reshape(tf.convert_to_tensor([[c.meta['node_numb'] for c in o.children[:self.cut_arity]] + ([0] * (first_arity - len(o.children))) for o in ops]), [-1]))
                     inp = tf.reshape(inp, [len(ops), first_arity * self.embedding_size])
                     inp = tf.concat([inp, extra_children], axis=1)
-                    res = network.optimized_call(inp)
+                    inp, values = self.augment_with_value(inp, node_t, ops)
+                    res = network.optimized_call([inp, values])
 
-                    if node_t.value_type is None:
-                        batch.scatter_update('embs',
-                                          [op.meta['node_numb'] for op in ops],
-                                          res)
-                        for o in ops:
-                            o.meta['computed'] = True
+                    batch.scatter_update('embs',
+                                      [op.meta['node_numb'] for op in ops],
+                                      res)
+                    for o in ops:
+                        o.meta['computed'] = True
 
-                    else:
-                            m_net = getattr(self, 'M_' + node_id)
-                            inp = node_t.value_type.abstract_to_representation_batch([x.value.abstract_value for x in ops])
-                            self._m_op(res, inp, m_net, ops)
             else:
                 raise NotImplementedError()
 
