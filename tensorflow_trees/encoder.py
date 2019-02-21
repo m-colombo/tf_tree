@@ -94,7 +94,7 @@ class EncoderCellsBuilder:
                     ], name=name)
 
                     return GatedNullableInput(output_model_builder=output_model_builder,
-                                              input_size=input_size,
+                                              maximum_input_size=input_size,
                                               embedding_size=encoder.embedding_size,
                                               name=name) if gate else output_model_builder(),\
                             tf.keras.Sequential([
@@ -109,17 +109,18 @@ class EncoderCellsBuilder:
                     return GatedFixedArityNodeEmbedder(activation=activation, hidden_coef=hidden_coef, embedding_size=encoder.embedding_size, arity=node_def.arity.value)
                 else:
                     return tf.keras.Sequential([
-                        tf.keras.layers.Dense(int((encoder.embedding_size) * hidden_coef),
+                        tf.keras.layers.Concatenate(-1),    # concatenate children embeddings and value
+                        tf.keras.layers.Dense(int((encoder.embedding_size) * hidden_coef * node_def.arity.value),
                                               activation=activation, name='/1'),
                         tf.keras.layers.Dense(encoder.embedding_size, activation=activation, name='/2')
                     ])
 
             return tf.keras.Sequential([
+                tf.keras.layers.Concatenate(-1),
                 tf.keras.layers.Dense(int((input_shape[0] + encoder.embedding_size) * hidden_coef), activation=activation, input_shape=input_shape, name=name+'/1'),
                 tf.keras.layers.Dense(encoder.embedding_size, activation=activation, name=name+'/2')
             ])
         return f
-
 
 
 class Encoder(tf.keras.Model):
@@ -254,14 +255,13 @@ class Encoder(tf.keras.Model):
 
                 elif type(node_t.arity) == NodeDefinition.VariableArity and not self.use_flat_strategy:
                     # TODO rnn (e.g. lstm) ?
-
                     idx = tf.cast(tf.reshape([[o.meta['node_numb'], o.children[o.meta.get('next_child', 0)].meta['node_numb']]
                                               for o in ops], [-1]), tf.int64)
 
                     inp = tf.gather(batch['embs'], idx)
 
                     inp = tf.reshape(inp, [len(ops), -1])
-                    inp, values = self.augment_with_value(inp, node_t, ops)
+                    inp, values = self.augment_with_value(inp, node_t, ops) # TODO test
 
                     res = network.optimized_call([inp, values])
 
