@@ -214,7 +214,7 @@ class BatchOfTreesForDecoding(BatchOfTrees):
                         labels=all_value_gt,
                         logits=all_value_gen)
                 else:
-                    vk_loss = tf.square(all_value_gen - all_value_gt)
+                    vk_loss = tf.reduce_mean(tf.square(all_value_gen - all_value_gt), axis=-1)
 
                 v_loss += tf.reduce_mean(vk_loss, axis=-1)   # TODO handle the mixing of losses from different domain (i.e. properly weight them)
 

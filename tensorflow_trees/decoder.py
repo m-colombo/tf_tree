@@ -140,7 +140,12 @@ class DecoderCellsBuilder:
         return f
 
     @staticmethod
-    def node_map(map):
+    def node_map(map: T.Dict[str, T.Callable[[T.Any], tf.keras.Model]]):
+        """
+
+        :param map: maps every value type to a
+        :return:
+        """
         def f(node_def, *args, **kwargs):
             return map[node_def.id](node_def, *args, **kwargs)
         return f

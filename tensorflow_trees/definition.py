@@ -109,8 +109,10 @@ class Tree:
         "value_overlap"])
 
     @staticmethod
-    def compare_trees(ts1: T.List["Tree"], ts2: T.List["Tree"]):
-        overlaps_s, overlaps_v = zip(*[ts1[i].compute_overlaps(ts2[i], True) for i in range(len(ts1))])
+    def compare_trees(ts1: T.List["Tree"], ts2: T.List["Tree"], also_values=True, skip_leaves_values=False,):
+        overlaps_s, overlaps_v = zip(*[ts1[i].compute_overlaps(ts2[i],
+                                                               also_values=also_values,
+                                                               skip_leaves_value=skip_leaves_values) for i in range(len(ts1))])
 
         overlaps_s_avg = float(np.mean(overlaps_s))
         overlaps_v_avg = float(np.mean(overlaps_v))

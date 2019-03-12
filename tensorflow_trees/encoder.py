@@ -226,7 +226,7 @@ class Encoder(tf.keras.Model):
                 inp = node_t.value_type.abstract_to_representation_batch([x.value.abstract_value for x in ops])
                 res = network.optimized_call(inp)
 
-                #  superflous when node is fused
+                #  superfluous when node is fused
                 if node_id not in self.tree_def.fusable_nodes_id_child_parent.keys():
                     batch.scatter_update('embs',
                                       [op.meta['node_numb'] for op in ops],
@@ -238,12 +238,10 @@ class Encoder(tf.keras.Model):
                 else:
                     rec_ops = [o.meta['parent'] for o in ops]
                     network = getattr(self, 'C_'+ops[0].meta['parent'].node_type_id)
-                    self._c_fixed_op(res, rec_ops, network)
 
-            # elif op_t == 'M':
-            #         values = node_t.value_type.abstract_to_representation_batch([x.value.abstract_value for x in ops])
-            #         embs = tf.gather(batch['embs'], [x.meta['node_numb'] for x in ops])
-            #         self._m_op(embs, values, network, ops)
+                    inp, values = self.augment_with_value(res, self.node_map[ops[0].meta['parent'].node_type_id], rec_ops)
+
+                    self._c_fixed_op([inp, values], rec_ops, network)
 
             elif op_t == 'C':
                 if type(node_t.arity) == NodeDefinition.FixedArity:
