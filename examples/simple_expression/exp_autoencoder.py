@@ -64,9 +64,7 @@ def main(argv=None):
                             EncoderCellsBuilder.simple_cell_builder(hidden_coef=FLAGS.hidden_cell_coef,
                                                                     activation=activation,
                                                                     gate=FLAGS.encoder_gate),
-                            EncoderCellsBuilder.simple_dense_embedder_builder(activation=activation),
-                            EncoderCellsBuilder.simple_categorical_merger_builder(hidden_coef=FLAGS.hidden_cell_coef,
-                                                                                  activation=activation)),
+                            EncoderCellsBuilder.simple_dense_embedder_builder(activation=activation)),
                       name='encoder')
 
     decoder = Decoder(tree_def=tree_gen.tree_def,
@@ -81,7 +79,7 @@ def main(argv=None):
                                                                             activation=activation),
                           categorical_value_inflater_builder=
                           DecoderCellsBuilder.simple_1ofk_value_inflater_builder(FLAGS.hidden_cell_coef,
-                                                                                   activation=tf.tanh),
+                                                                                   activation=activation),
                           dense_value_inflater_builder=None,    # unused
                           node_inflater_builder=
                             DecoderCellsBuilder.simple_node_inflater_builder(FLAGS.hidden_cell_coef,

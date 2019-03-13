@@ -44,7 +44,7 @@ def define_common_flags():
 
     tf.flags.DEFINE_string(
         "activation",
-        default='leaky_relu',
+        default='tanh',
         help="activation used where there are no particular constraints")
 
     tf.flags.DEFINE_float(

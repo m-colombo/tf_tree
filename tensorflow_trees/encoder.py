@@ -86,7 +86,7 @@ class EncoderCellsBuilder:
                 else:
                     # +1 1 is the summarization of extra children
                     input_size = encoder.embedding_size * (encoder.cut_arity + 1) +\
-                                 node_def.value_type.representation_shape if node_def.value_type is not None else 0
+                                 (node_def.value_type.representation_shape if node_def.value_type is not None else 0)
                     output_model_builder = lambda :tf.keras.Sequential([
                         NullableInputDenseLayer(input_size=input_size,
                                                 hidden_activation=activation, hidden_size=encoder.embedding_size * int(encoder.cut_arity**hidden_coef)),
