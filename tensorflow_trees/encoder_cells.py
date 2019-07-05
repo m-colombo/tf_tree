@@ -5,39 +5,92 @@ from tensorflow_trees.definition import NodeDefinition
 
 
 class GatedFixedArityNodeEmbedder(tf.keras.Model):
+    class _SingleLayer(tf.keras.Model):
 
-    def __init__(self, *, activation=None, hidden_coef: float= None, embedding_size: int = None,
+        def __init__(self, *, activation=None, hidden_coef: float = None, embedding_size: int = None,
+                     arity: int = None,
+                     **kwargs):
+            super(GatedFixedArityNodeEmbedder._SingleLayer, self).__init__(**kwargs)
+
+            self.activation = activation
+            self.hidden_coef = hidden_coef
+            self.embedding_size = embedding_size
+            self.arity = arity
+
+        def build(self, input_shape):
+            """
+
+            :param input_shape: supposed to be [[batch, children], [batch, values]]
+            :return:
+            """
+            children_shape, value_shape = input_shape
+            total_input_size = children_shape[1].value + value_shape[1].value
+
+            self.gating_f = tf.keras.Sequential([
+                tf.keras.layers.Dense(units=1 + self.arity, activation=tf.sigmoid)])
+
+            size = min(int((total_input_size + self.embedding_size) * self.hidden_coef), self.embedding_size)
+            self.output_f = tf.keras.Sequential([
+                tf.keras.layers.Dense(size,
+                                      activation=self.activation, name='/1'),
+                tf.keras.layers.Dense(size,
+                                      activation=self.activation, name='/2a'),
+                tf.keras.layers.Dense(self.embedding_size, activation=self.activation, name='/2')
+            ])
+
+            super(GatedFixedArityNodeEmbedder._SingleLayer, self).build(input_shape)
+
+        def call(self, x, *args, **kwargs):
+            """
+
+            :param x: a list[
+                zero padded children input [batch,  <= input_size],
+                parent values [batch, value_size]
+                ]
+            :return: [batch, output_size]
+            """
+            children, values = x
+            concat = tf.concat([children, values], axis=-1)
+            output = self.output_f(concat)  # [batch, emb]
+
+            # output gatings only on children embeddings (value embedding size might be different)
+            # out = g * out + (g1 * c1 + g2 * c2 ...)
+            childrens = tf.reshape(children, [children.shape[0], self.arity, -1])  # [batch, arity, children_emb]
+            gatings = tf.expand_dims(tf.nn.softmax(self.gating_f(concat), axis=-1), axis=-1)
+            corrected = tf.concat([childrens, tf.expand_dims(output, axis=1)], axis=1) * gatings
+            return tf.reduce_sum(corrected, axis=1)
+
+        def compute_output_shape(self, input_shape):
+            return (input_shape[0], self.output_size)
+
+    def __init__(self, *, stacked_layers=1, activation=None, hidden_coef: float= None, embedding_size: int = None,
                  arity: int = None,
                  **kwargs):
         super(GatedFixedArityNodeEmbedder, self).__init__(**kwargs)
+
+        # TODO consider bigger intermediate embedding
+
+        self.stacked_layers = [GatedFixedArityNodeEmbedder._SingleLayer(
+            activation=activation,
+            hidden_coef=hidden_coef,
+            embedding_size=embedding_size,
+            arity=arity,
+            **kwargs
+        )]
+
+        for i in range(stacked_layers - 1):
+            self.stacked_layers.append(GatedFixedArityNodeEmbedder._SingleLayer(
+                activation=activation,
+                hidden_coef=hidden_coef,
+                embedding_size=embedding_size,
+                arity=1,    # TODO consider whether to forward the initial input to intermediate cells, thus 1 + arity
+                **kwargs
+            ))
 
         self.activation = activation
         self.hidden_coef = hidden_coef
         self.embedding_size = embedding_size
         self.arity = arity
-
-    def build(self, input_shape):
-        """
-
-        :param input_shape: supposed to be [[batch, children], [batch, values]]
-        :return:
-        """
-        children_shape, value_shape = input_shape
-        total_input_size = children_shape[1].value + value_shape[1].value
-
-        self.gating_f = tf.keras.Sequential([
-            tf.keras.layers.Dense(units=1 + self.arity, activation=tf.sigmoid)])
-
-        size = min(int((total_input_size + self.embedding_size) * self.hidden_coef), self.embedding_size)
-        self.output_f = tf.keras.Sequential([
-            tf.keras.layers.Dense(size,
-                                  activation=self.activation, name='/1'),
-            tf.keras.layers.Dense(size,
-                                  activation=self.activation, name='/2a'),
-            tf.keras.layers.Dense(self.embedding_size, activation=self.activation, name='/2')
-        ])
-
-        super(GatedFixedArityNodeEmbedder, self).build(input_shape)
 
     def call(self, x, *args, **kwargs):
         """
@@ -46,21 +99,15 @@ class GatedFixedArityNodeEmbedder(tf.keras.Model):
             zero padded children input [batch,  <= input_size],
             parent values [batch, value_size]
             ]
-        :return: [clones, batch, output_size]
+        :return: [batch, output_size]
         """
+
         children, values = x
-        concat = tf.concat([children, values], axis=-1)
-        output = self.output_f(concat)  # [batch, emb]
+        embedding = self.stacked_layers[0](x)
+        for l in self.stacked_layers[1:]:
+            embedding = l([embedding, values])
 
-        # output gatings only on children embeddings (value embedding size might be different)
-        # out = g * out + (g1 * c1 + g2 * c2 ...)
-        childrens = tf.reshape(children, [children.shape[0], self.arity, -1])  # [batch, arity, children_emb]
-        gatings = tf.expand_dims(tf.nn.softmax(self.gating_f(concat), axis=-1), axis=-1)
-        corrected = tf.concat([childrens, tf.expand_dims(output, axis=1)], axis=1) * gatings
-        return tf.reduce_sum(corrected, axis=1)
-
-    def compute_output_shape(self, input_shape):
-        return (input_shape[0], self.output_size)
+        return embedding
 
 
 class NullableInputDenseLayer(tf.keras.layers.Layer):
