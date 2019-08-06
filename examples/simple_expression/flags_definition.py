@@ -97,6 +97,12 @@ def define_encoder_flags():
         default="FLAT",
         help="FLAT or REC")
 
+    tf.flags.DEFINE_integer(
+        "enc_cell_depth",
+        default=2,
+        help="how many layers does a cell have, including the output layer"
+    )
+
 
 def define_decoder_flags():
     tf.flags.DEFINE_boolean(

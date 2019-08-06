@@ -4,110 +4,96 @@ import typing as T
 from tensorflow_trees.definition import NodeDefinition
 
 
-class GatedFixedArityNodeEmbedder(tf.keras.Model):
-    class _SingleLayer(tf.keras.Model):
+class FixedArityNodeEmbedder(tf.keras.Model):
 
-        def __init__(self, *, activation=None, hidden_coef: float = None, embedding_size: int = None,
-                     arity: int = None,
-                     **kwargs):
-            super(GatedFixedArityNodeEmbedder._SingleLayer, self).__init__(**kwargs)
+    # TODO consider also a coefficient for fatter/thinner interpolation and its skewness
+    @staticmethod
+    def _layers_size_linear(input_size: int, output_size: int, layers: int):
+        for i in range(layers):
+            yield int(input_size + (output_size - input_size) * (i + 1) / (layers))
 
-            self.activation = activation
-            self.hidden_coef = hidden_coef
-            self.embedding_size = embedding_size
-            self.arity = arity
-
-        def build(self, input_shape):
-            """
-
-            :param input_shape: supposed to be [[batch, children], [batch, values]]
-            :return:
-            """
-            children_shape, value_shape = input_shape
-            total_input_size = children_shape[1].value + value_shape[1].value
-
-            self.gating_f = tf.keras.Sequential([
-                tf.keras.layers.Dense(units=1 + self.arity, activation=tf.sigmoid)])
-
-            size = min(int((total_input_size + self.embedding_size) * self.hidden_coef), self.embedding_size)
-            self.output_f = tf.keras.Sequential([
-                tf.keras.layers.Dense(size,
-                                      activation=self.activation, name='/1'),
-                tf.keras.layers.Dense(size,
-                                      activation=self.activation, name='/2a'),
-                tf.keras.layers.Dense(self.embedding_size, activation=self.activation, name='/2')
-            ])
-
-            super(GatedFixedArityNodeEmbedder._SingleLayer, self).build(input_shape)
-
-        def call(self, x, *args, **kwargs):
-            """
-
-            :param x: a list[
-                zero padded children input [batch,  <= input_size],
-                parent values [batch, value_size]
-                ]
-            :return: [batch, output_size]
-            """
-            children, values = x
-            concat = tf.concat([children, values], axis=-1)
-            output = self.output_f(concat)  # [batch, emb]
-
-            # output gatings only on children embeddings (value embedding size might be different)
-            # out = g * out + (g1 * c1 + g2 * c2 ...)
-            childrens = tf.reshape(children, [children.shape[0], self.arity, -1])  # [batch, arity, children_emb]
-            gatings = tf.expand_dims(tf.nn.softmax(self.gating_f(concat), axis=-1), axis=-1)
-            corrected = tf.concat([childrens, tf.expand_dims(output, axis=1)], axis=1) * gatings
-            return tf.reduce_sum(corrected, axis=1)
-
-        def compute_output_shape(self, input_shape):
-            return (input_shape[0], self.output_size)
-
-    def __init__(self, *, stacked_layers=1, activation=None, hidden_coef: float= None, embedding_size: int = None,
-                 arity: int = None,
+    def __init__(self, *,
+                 node_definition: NodeDefinition = None,
+                 # arity: int = None,
+                 embedding_size: int = None,
+                 hidden_cell_coef: float = 0.5,
+                 activation=tf.nn.tanh,
+                 stacked_layers: int = 1,
+                 input_gate=False,
+                 output_gate=True,
                  **kwargs):
-        super(GatedFixedArityNodeEmbedder, self).__init__(**kwargs)
 
-        # TODO consider bigger intermediate embedding
+        super(FixedArityNodeEmbedder, self).__init__(**kwargs)
 
-        self.stacked_layers = [GatedFixedArityNodeEmbedder._SingleLayer(
-            activation=activation,
-            hidden_coef=hidden_coef,
-            embedding_size=embedding_size,
-            arity=arity,
-            **kwargs
-        )]
-
-        for i in range(stacked_layers - 1):
-            self.stacked_layers.append(GatedFixedArityNodeEmbedder._SingleLayer(
-                activation=activation,
-                hidden_coef=hidden_coef,
-                embedding_size=embedding_size,
-                arity=1,    # TODO consider whether to forward the initial input to intermediate cells, thus 1 + arity
-                **kwargs
-            ))
-
-        self.activation = activation
-        self.hidden_coef = hidden_coef
+        self.node_def = node_definition
+        # self.arity = arity
         self.embedding_size = embedding_size
-        self.arity = arity
+        self.stacked_layers = stacked_layers
+        self.hidden_cell_coef = hidden_cell_coef
+        self.activation = activation
+
+        if input_gate:
+            self.input_gate = tf.keras.layers.Dense(
+                units=1 + self.node_def.arity.value,   # TODO should be the same network for every element ?
+                activation=None)
+        else:
+            self.input_gate = None
+
+        if output_gate:
+            self.output_gate = tf.keras.layers.Dense(
+                units=1 + self.node_def.arity.value,   # TODO should be the same network for every element ?
+                activation=None)
+        else:
+            self.output_gate = None
+
+        self.cells = tf.keras.Sequential([
+            tf.keras.layers.Dense(s,activation=activation)
+            for s in FixedArityNodeEmbedder._layers_size_linear(
+                input_size=self.node_def.arity.value * self.embedding_size + self.node_def.value_type.representation_shape if self.node_def.value_type else 0,
+                output_size=embedding_size,
+                layers=stacked_layers)
+            ])  # TODO consider hidden_cell_coef to build fatter or thinner
+
+        tf.logging.warning('trees:encoder:simpleCellBuilder:\tnot using hidden_cell_coef')
+
 
     def call(self, x, *args, **kwargs):
         """
 
-        :param x: a list[
-            zero padded children input [batch,  <= input_size],
-            parent values [batch, value_size]
-            ]
-        :return: [batch, output_size]
+        :param x: (
+            packed_children: [batch_size, arity*embedding_size],
+            values: [batch_size, value_size]
+        )
+        :param args:
+        :param kwargs:
+        :return:
         """
 
-        children, values = x
-        embedding = self.stacked_layers[0](x)
-        for l in self.stacked_layers[1:]:
-            embedding = l([embedding, values])
+        # extract inputs info
+        packed_children, values = x
+        batch_size = packed_children.shape[0]
 
-        return embedding
+        # rescale inputs
+        if self.input_gate:
+            gatings = tf.nn.softmax(self.input_gate(tf.concat([packed_children, values], axis=-1)))
+            children = tf.reshape(packed_children, [batch_size, self.node_def.arity.value, self.embedding_size])
+            children_scaled = children * tf.reshape(gatings[:, 1:], [batch_size, self.node_def.arity.value, 1])
+            values_scaled = values * tf.reshape(gatings[:, 0], [-1, 1])
+            inputs = tf.concat([tf.reshape(children_scaled, [batch_size, -1]), values_scaled], axis=-1)
+        else:
+            inputs = tf.concat([packed_children, values], axis=-1)
+
+        output = self.cells(inputs)
+
+        # output gate: linearly combine output and inputs
+        if self.output_gate:
+            children = tf.reshape(packed_children, [batch_size, self.node_def.arity.value, self.embedding_size])
+            gatings = tf.nn.softmax(self.output_gate(tf.concat([packed_children, values, output], axis=-1)))
+            children_scaled = children * tf.reshape(gatings[:, 1:], [batch_size, self.node_def.arity.value, 1])
+            output_scaled = tf.reshape(output * tf.reshape(gatings[:, 0], [-1, 1]), [batch_size, 1, self.embedding_size])
+            output = tf.reduce_sum(tf.concat([children_scaled, output_scaled], axis=1), axis=1)
+
+        return output
 
 
 class NullableInputDenseLayer(tf.keras.layers.Layer):
@@ -159,7 +145,7 @@ class NullableInputDenseLayer(tf.keras.layers.Layer):
 
 class GatedNullableInput(tf.keras.Model):
 
-    def __init__(self, *, embedding_size: int = None, output_model_builder: tf.keras.Model = None, maximum_input_size: int = None, **kwargs):
+    def __init__(self, *, stacked_layers: int = 1, embedding_size: int = None, output_model_builder: tf.keras.Model = None, maximum_input_size: int = None, **kwargs):
         """
 
         :param embedding_size:
@@ -171,6 +157,7 @@ class GatedNullableInput(tf.keras.Model):
         self.embedding_size = embedding_size
         self.output_model_builder = output_model_builder
         self.maximum_input_size = maximum_input_size
+        self.stacked_layers = stacked_layers
 
         super(GatedNullableInput, self).__init__(**kwargs)
 

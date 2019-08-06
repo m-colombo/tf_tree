@@ -3,7 +3,7 @@ import typing as T
 
 from tensorflow_trees.definition import TreeDefinition, Tree, NodeDefinition
 from tensorflow_trees.batch import BatchOfTreesForEncoding
-from tensorflow_trees.encoder_cells import GatedFixedArityNodeEmbedder, GatedNullableInput, NullableInputDenseLayer
+from tensorflow_trees.encoder_cells import FixedArityNodeEmbedder, GatedNullableInput, NullableInputDenseLayer
 
 
 class EncoderCellsBuilder:
@@ -73,16 +73,33 @@ class EncoderCellsBuilder:
         return f
 
     @staticmethod
-    def simple_cell_builder(hidden_coef, activation=tf.nn.leaky_relu, gate=True):
+    def simple_cell_builder(hidden_coef, activation=tf.nn.leaky_relu, gate=None, output_gate=True, input_gate=False, stacked_layers:int = 2):
+        """
+
+        :param hidden_coef:
+        :param activation:
+        :param output_gate:
+        :param input_gate:
+        :param stacked_layers: cell depth, counting the output layer
+        :return:
+        """
+
+        # for backcompatibility
+        if gate is not None:
+            input_gate = gate
+            output_gate = gate
+
+        # TODO handle input/output gates, not only output
         def f(node_def: NodeDefinition, encoder: 'Encoder', name=None):
             if type(node_def.arity) == node_def.VariableArity:
                 if not encoder.use_flat_strategy:
-                    # TODO use rnn/lstm
-                    input_shape = (encoder.embedding_size*2 +
-                                   node_def.value_type.representation_shape if node_def.value_type is not None else 0,)
-
-                    if gate:
-                        return GatedFixedArityNodeEmbedder(activation=activation, hidden_coef=hidden_coef, embedding_size=encoder.embedding_size, arity=2)
+                    raise NotImplemented()  # TODO
+                    # # TODO use rnn/lstm
+                    # input_shape = (encoder.embedding_size*2 +
+                    #                node_def.value_type.representation_shape if node_def.value_type is not None else 0,)
+                    #
+                    # if gate:
+                    #     return GatedFixedArityNodeEmbedder(activation=activation, hidden_coef=hidden_coef, embedding_size=encoder.embedding_size, arity=2)
                 else:
                     # +1 1 is the summarization of extra children
                     input_size = encoder.embedding_size * (encoder.cut_arity + 1) +\
@@ -96,7 +113,7 @@ class EncoderCellsBuilder:
                     return GatedNullableInput(output_model_builder=output_model_builder,
                                               maximum_input_size=input_size,
                                               embedding_size=encoder.embedding_size,
-                                              name=name) if gate else output_model_builder(),\
+                                              name=name) if output_gate else output_model_builder(),\
                             tf.keras.Sequential([
                                 # tf.keras.layers.Reshape([encoder.max_arity - encoder.cut_arity, encoder.embedding_size]),
                                 tf.keras.layers.Dense(int(encoder.embedding_size * hidden_coef), activation=activation, input_shape=(encoder.embedding_size,),
@@ -105,21 +122,18 @@ class EncoderCellsBuilder:
                             ])
                     # input_shape = (encoder.embedding_size * encoder.max_arity, )
             elif type(node_def.arity) == node_def.FixedArity:
-                if gate:
-                    return GatedFixedArityNodeEmbedder(activation=activation, hidden_coef=hidden_coef, embedding_size=encoder.embedding_size, arity=node_def.arity.value)
-                else:
-                    return tf.keras.Sequential([
-                        tf.keras.layers.Concatenate(-1),    # concatenate children embeddings and value
-                        tf.keras.layers.Dense(int((encoder.embedding_size) * hidden_coef * node_def.arity.value),
-                                              activation=activation, name='/1'),
-                        tf.keras.layers.Dense(encoder.embedding_size, activation=activation, name='/2')
-                    ])
 
-            return tf.keras.Sequential([
-                tf.keras.layers.Concatenate(-1),
-                tf.keras.layers.Dense(int((input_shape[0] + encoder.embedding_size) * hidden_coef), activation=activation, input_shape=input_shape, name=name+'/1'),
-                tf.keras.layers.Dense(encoder.embedding_size, activation=activation, name=name+'/2')
-            ])
+                    return FixedArityNodeEmbedder(
+                        node_definition=node_def,
+                        stacked_layers=stacked_layers,
+                        activation=activation, hidden_cell_coef=hidden_coef, embedding_size=encoder.embedding_size,
+                        input_gate=input_gate, output_gate=output_gate)
+
+            # return tf.keras.Sequential([
+            #     tf.keras.layers.Concatenate(-1),
+            #     tf.keras.layers.Dense(int((input_shape[0] + encoder.embedding_size) * hidden_coef), activation=activation, input_shape=input_shape, name=name+'/1'),
+            #     tf.keras.layers.Dense(encoder.embedding_size, activation=activation, name=name+'/2')
+            # ])
         return f
 
 
