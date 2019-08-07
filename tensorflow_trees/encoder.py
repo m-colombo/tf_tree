@@ -3,7 +3,7 @@ import typing as T
 
 from tensorflow_trees.definition import TreeDefinition, Tree, NodeDefinition
 from tensorflow_trees.batch import BatchOfTreesForEncoding
-from tensorflow_trees.encoder_cells import FixedArityNodeEmbedder, GatedNullableInput, NullableInputDenseLayer
+from tensorflow_trees.encoder_cells import FixedArityNodeEmbedder, VariableArityNodeEmbedder, _NullableInputDenseLayer
 
 
 class EncoderCellsBuilder:
@@ -101,19 +101,17 @@ class EncoderCellsBuilder:
                     # if gate:
                     #     return GatedFixedArityNodeEmbedder(activation=activation, hidden_coef=hidden_coef, embedding_size=encoder.embedding_size, arity=2)
                 else:
-                    # +1 1 is the summarization of extra children
-                    input_size = encoder.embedding_size * (encoder.cut_arity + 1) +\
-                                 (node_def.value_type.representation_shape if node_def.value_type is not None else 0)
-                    output_model_builder = lambda :tf.keras.Sequential([
-                        NullableInputDenseLayer(input_size=input_size,
-                                                hidden_activation=activation, hidden_size=encoder.embedding_size * int(encoder.cut_arity**hidden_coef)),
-                        tf.keras.layers.Dense(encoder.embedding_size, activation=activation)
-                    ], name=name)
 
-                    return GatedNullableInput(output_model_builder=output_model_builder,
-                                              maximum_input_size=input_size,
-                                              embedding_size=encoder.embedding_size,
-                                              name=name) if output_gate else output_model_builder(),\
+                    return VariableArityNodeEmbedder(
+                        node_def=node_def,
+                        maximum_input_arity=encoder.cut_arity + 1,  # +1 is the summarization of extra children
+                        embedding_size=encoder.embedding_size,
+                        hidden_cell_coef=hidden_coef,
+                        activation=activation,
+                        stacked_layers=stacked_layers,
+                        input_gate=input_gate,
+                        output_gate=output_gate
+                    ),\
                             tf.keras.Sequential([
                                 # tf.keras.layers.Reshape([encoder.max_arity - encoder.cut_arity, encoder.embedding_size]),
                                 tf.keras.layers.Dense(int(encoder.embedding_size * hidden_coef), activation=activation, input_shape=(encoder.embedding_size,),
