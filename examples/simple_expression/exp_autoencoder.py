@@ -63,8 +63,8 @@ def main(argv=None):
                       cellsbuilder=EncoderCellsBuilder(
                             EncoderCellsBuilder.simple_cell_builder(hidden_coef=FLAGS.hidden_cell_coef,
                                                                     activation=activation,
-                                                                    input_gate=FLAGS.encoder_gate,
-                                                                    output_gate=FLAGS.encoder_gate,     # TODO handle input/output gates separately in flags
+                                                                    input_gate=FLAGS.encoder_igate,
+                                                                    output_gate=FLAGS.encoder_ogate,     # TODO handle input/output gates separately in flags
                                                                     stacked_layers=FLAGS.enc_cell_depth,
                                                                     ),
                             EncoderCellsBuilder.simple_dense_embedder_builder(activation=activation)),

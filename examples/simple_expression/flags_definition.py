@@ -88,9 +88,14 @@ def define_common_flags():
 
 def define_encoder_flags():
     tf.flags.DEFINE_boolean(
-        "encoder_gate",
+        "encoder_ogate",
         default=True,
-        help="")
+        help="output gate")
+
+    tf.flags.DEFINE_boolean(
+        "encoder_igate",
+        default=False,
+        help="input gate")
 
     tf.flags.DEFINE_string(
         "enc_variable_arity_strategy",

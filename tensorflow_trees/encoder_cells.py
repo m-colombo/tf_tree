@@ -147,19 +147,20 @@ class VariableArityNodeEmbedder(tf.keras.Model):
         super(VariableArityNodeEmbedder, self).__init__(**kwargs)
 
         tf.logging.warning('trees:encoder:simpleCellBuilder:VariableArityNodeEmbedder\tnot using hidden_cell_coef')
-        cells_size = list(_layers_size_linear(maximum_input_arity, embedding_size, stacked_layers))
+        input_size = embedding_size * maximum_input_arity + (node_def.value_type.representation_shape if node_def.value_type else 0)
+        cells_size = list(_layers_size_linear(input_size, embedding_size, stacked_layers))
 
         cells = [_NullableInputDenseLayer(
-            input_size=embedding_size * maximum_input_arity + (node_def.value_type.representation_shape if node_def.value_type else 0),
+            input_size=input_size,
             output_activation=activation,
             output_size=cells_size[0])]
 
         for s in cells_size[1:]:
             cells.append(tf.keras.layers.Dense(s, activation))
 
-        self.cells = tf.keras.Sequential(cells)
+        model = tf.keras.Sequential(cells)
         self.gated_model = _GatedModel(
-            model = self.cells,
+            model=model,
             node_def=node_def,
             embedding_size=embedding_size,
             maximum_input_arity=maximum_input_arity,
