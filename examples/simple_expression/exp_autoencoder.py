@@ -87,7 +87,8 @@ def main(argv=None):
                           node_inflater_builder=
                             DecoderCellsBuilder.simple_node_inflater_builder(FLAGS.hidden_cell_coef,
                                                                              activation=activation,
-                                                                             gate=FLAGS.decoder_gate)),
+                                                                             gate=FLAGS.decoder_gate,
+                                                                             stacked_layers=FLAGS.dec_cell_depth)),
                       variable_arity_strategy=FLAGS.dec_variable_arity_strategy)
 
     ###########

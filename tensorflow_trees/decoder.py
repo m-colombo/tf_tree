@@ -4,7 +4,7 @@ import itertools
 
 from tensorflow_trees.definition import TreeDefinition, Tree, TrainingTree, NodeDefinition
 from tensorflow_trees.batch import BatchOfTreesForDecoding
-from tensorflow_trees.decoder_cells import GatedFixedArityNodeDecoder, ParallelDense
+from tensorflow_trees.decoder_cells import FixedArityNodeDecoder, ParallelDense
 
 
 class DecoderCellsBuilder:
@@ -85,20 +85,13 @@ class DecoderCellsBuilder:
         return f
 
     @staticmethod
-    def simple_node_inflater_builder(hidden_coef: float, activation=tf.nn.relu, gate=True):
+    def simple_node_inflater_builder(hidden_coef: float, activation=tf.nn.relu, gate=True, stacked_layers: int = 2):
         def f(node_def: NodeDefinition, decoder, name=None):
             if type(node_def.arity) == NodeDefinition.FixedArity:
-                if gate:
-                    return GatedFixedArityNodeDecoder(activation=activation, hidden_coef=hidden_coef,
-                                                  embedding_size=decoder.embedding_size,
-                                                  arity=node_def.arity.value, name=name)
-                else:
-                    return tf.keras.Sequential([
-                                        tf.keras.layers.Dense(
-                        int(hidden_coef * decoder.embedding_size * node_def.arity.value), activation=activation),
-                                        tf.keras.layers.Dense(decoder.embedding_size * node_def.arity.value,
-                                                               activation=activation),
-                    ], name=name)
+
+                return FixedArityNodeDecoder(activation=activation, hidden_coef=hidden_coef,
+                                             embedding_size=decoder.embedding_size,
+                                             node_def=node_def, output_gate=gate, stacked_layers=stacked_layers, name=name)
             elif type(node_def.arity) == NodeDefinition.VariableArity and not decoder.use_flat_strategy:
                 return tf.keras.Sequential([
                     tf.keras.layers.Dense(int(decoder.embedding_size * 2 * hidden_coef), activation=activation),

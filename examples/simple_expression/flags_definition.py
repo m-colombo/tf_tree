@@ -110,6 +110,12 @@ def define_encoder_flags():
 
 
 def define_decoder_flags():
+    tf.flags.DEFINE_integer(
+        "dec_cell_depth",
+        default=2,
+        help="how many layers does a cell have, including the output layer"
+    )
+
     tf.flags.DEFINE_boolean(
         "decoder_gate",
         default=False,

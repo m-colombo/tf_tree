@@ -1,13 +1,7 @@
 import tensorflow as tf
 
 from tensorflow_trees.definition import NodeDefinition
-
-
-# TODO consider also a coefficient for fatter/thinner interpolation and its skewness
-def _layers_size_linear(input_size: int, output_size: int, layers: int):
-    for i in range(layers):
-        yield int(input_size + (output_size - input_size) * (i + 1) / (layers))
-
+from tensorflow_trees.miscellaneas import interpolate_layers_size
 
 class _GatedModel(tf.keras.Model):
     def __init__(self, *, model: tf.keras.Model = None, node_def: NodeDefinition = None,
@@ -103,7 +97,7 @@ class FixedArityNodeEmbedder(tf.keras.Model):
 
         self.cells = tf.keras.Sequential([
             tf.keras.layers.Dense(s, activation=activation)
-            for s in _layers_size_linear(
+            for s in interpolate_layers_size(
                 input_size=node_definition.arity.value * embedding_size + (node_definition.value_type.representation_shape if node_definition.value_type else 0), # TODO might be too big
                 output_size=embedding_size,
                 layers=stacked_layers)
@@ -148,7 +142,7 @@ class VariableArityNodeEmbedder(tf.keras.Model):
 
         tf.logging.warning('trees:encoder:simpleCellBuilder:VariableArityNodeEmbedder\tnot using hidden_cell_coef')
         input_size = embedding_size * maximum_input_arity + (node_def.value_type.representation_shape if node_def.value_type else 0)
-        cells_size = list(_layers_size_linear(input_size, embedding_size, stacked_layers))
+        cells_size = list(interpolate_layers_size(input_size, embedding_size, stacked_layers))
 
         cells = [_NullableInputDenseLayer(
             input_size=input_size,

@@ -2,46 +2,62 @@ import tensorflow as tf
 import typing as T
 
 from tensorflow_trees.definition import NodeDefinition
+from tensorflow_trees.miscellaneas import interpolate_layers_size
 
 
-class GatedFixedArityNodeDecoder(tf.keras.Model):
-    """ Build a dense 2-layer which is optimized for left-0-padded input """
-
+class FixedArityNodeDecoder(tf.keras.Model):
     def __init__(self, *, activation=None, hidden_coef: float= None, embedding_size: int = None,
-                 arity: int = None,
+                 node_def: NodeDefinition = None, stacked_layers: int = 2,
+                 output_gate=True,
                  **kwargs):
+        super(FixedArityNodeDecoder, self).__init__(**kwargs)
 
-        self.activation = activation
-        self.hidden_coef = hidden_coef
         self.embedding_size = embedding_size
-        self.arity = arity
-        super(GatedFixedArityNodeDecoder, self).__init__(**kwargs)
+        self.node_def = node_def
 
-    def build(self, input_shape):
+        if output_gate:
+            self.output_gate = tf.keras.layers.Dense(1, activation=tf.sigmoid)
+        else:
+            self.output_gate = None
 
-        self.gating_f = tf.keras.Sequential([
-            # tf.keras.layers.Dense(units=int(input_shape[1].value * self.hidden_coef), activation=tf.sigmoid),
-                                             tf.keras.layers.Dense(units=1, activation=tf.sigmoid)])
-        self.output_f = tf.keras.Sequential([
-            tf.keras.layers.Dense(int((input_shape[1].value + self.embedding_size * self.arity) * self.hidden_coef),
-                                  activation=self.activation, input_shape=input_shape),
-            tf.keras.layers.Dense(self.embedding_size * self.arity, activation=self.activation)
+        tf.logging.warning("trees:decoder:cells:FixedArityNodeDecoder\tnot using hidden_cell_coef")
+        self.model = tf.keras.Sequential([
+            tf.keras.layers.Dense(u, activation=activation)
+            for u in interpolate_layers_size(
+                embedding_size,  # TODO input size is actually bigger, consider it? (value, distribs ?)
+                embedding_size * node_def.arity.value,
+                stacked_layers  # TODO exploit hidden_coef for interpolation fatness
+            )
         ])
-        super(GatedFixedArityNodeDecoder, self).build(input_shape)
 
-    def call(self, x, *args, **kwargs):
+    def __call__(self, x, *args, **kwargs):
         """
 
-        :param x: zero padded input [batch,  <= input_size]
-        :return: [clones, batch, output_size]
+        :param x: [batch_size, embedding_size + other_infos_size]
+        :return: [batch_size, embedding_size * arity]
         """
-        parent_embs = x[:,:self.embedding_size] # TODO check - concat order is importand
-        output = self.output_f(x)  # [batch, emb * arity]
-        childrens = tf.reshape(output, [x.shape[0], self.arity, -1])  # [batch, arity, children_emb]
-        gating_inp = tf.reshape(tf.concat([childrens, tf.tile(tf.expand_dims(x, axis=1), [1,self.arity, 1])], axis=-1), [x.shape[0] * self.arity, -1])
-        gatings = self.gating_f(gating_inp)
-        corrected = tf.reshape(childrens, [x.shape[0] * self.arity, -1]) * gatings + (1 - gatings) * tf.reshape(tf.tile(tf.expand_dims(parent_embs, axis=1), [1,self.arity, 1]), [x.shape[0] * self.arity, -1])
-        return tf.reshape(corrected, [x.shape[0], -1])
+        arity = self.node_def.arity.value
+        batch_size = x.shape[0]
+
+        parent_embs = x[:, :self.embedding_size]
+        output = self.model(x)  # [batch, emb * arity]
+        childrens = tf.reshape(output, [batch_size, arity, -1])
+
+        if self.output_gate is not None:
+            gating_inp = tf.reshape(
+                    tf.concat([childrens,
+                               tf.tile(tf.expand_dims(x, axis=1), [1, arity, 1])], axis=-1),
+                    [batch_size * arity, -1])
+
+            gatings = self.output_gate(gating_inp)
+            corrected = gatings * tf.reshape(childrens, [batch_size * arity, -1]) + \
+                        (1 - gatings) * tf.reshape(
+                                            tf.tile(tf.expand_dims(parent_embs, axis=1), [1, arity, 1]),
+                                            [batch_size * arity, -1])
+        else:
+            corrected = childrens
+
+        return tf.reshape(corrected, [batch_size, arity * self.embedding_size])
 
 
 class ParallelDense(tf.keras.layers.Layer):
