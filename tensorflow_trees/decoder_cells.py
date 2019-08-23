@@ -5,6 +5,56 @@ from tensorflow_trees.definition import NodeDefinition
 from tensorflow_trees.miscellaneas import interpolate_layers_size
 
 
+class _GatedModel(tf.keras.Model):
+    def __init__(self, *, embedding_size: int, model=None, **kwargs):
+        """
+
+        :param model: [batch_size, input_size] -> [batch_size, embedding_size * number_of_children]
+        :param embedding_size:
+        :param kwargs:
+        """
+        super(_GatedModel, self).__init__(**kwargs)
+
+        self.embedding_size = embedding_size
+
+        self.model = model
+        self.output_gate = tf.keras.layers.Dense(1, activation=tf.sigmoid)
+
+    def call(self, x, *args, **kwargs):
+        """
+
+        :param x: [batch_size, embedding_size + other_infos_size] if model else [batch_size, embedding_size * number_of_children]
+        :return: [batch_size, embedding_size * arity]
+        """
+
+        if self.model is None:
+            outputs = x
+        else:
+            outputs = self.model(x, *args, **kwargs)
+
+        arity = outputs.shape[1].value // self.embedding_size
+        batch_size = x.shape[0].value
+
+        parent_embs = x[:, :self.embedding_size]
+        childrens = tf.reshape(outputs, [batch_size, arity, self.embedding_size])
+
+        gating_inp = tf.reshape(
+            tf.concat([childrens,
+                       tf.tile(tf.expand_dims(x, axis=1), [1, arity, 1])], axis=-1),
+            [batch_size * arity, -1])
+
+        gatings = self.output_gate(gating_inp)
+
+        corrected = \
+            gatings * tf.reshape(childrens, [batch_size * arity, -1]) + \
+            (1 - gatings) * \
+                tf.reshape(
+                    tf.tile(tf.expand_dims(parent_embs, axis=1), [1, arity, 1]),
+                    [batch_size * arity, -1])
+
+        return tf.reshape(corrected, [batch_size, arity * self.embedding_size])
+
+
 class FixedArityNodeDecoder(tf.keras.Model):
     def __init__(self, *, activation=None, hidden_coef: float= None, embedding_size: int = None,
                  node_def: NodeDefinition = None, stacked_layers: int = 2,
@@ -14,122 +64,118 @@ class FixedArityNodeDecoder(tf.keras.Model):
 
         self.embedding_size = embedding_size
         self.node_def = node_def
+        self.activation = activation
+        self.stacked_layers = stacked_layers
+        self.output_gate = output_gate
 
-        if output_gate:
-            self.output_gate = tf.keras.layers.Dense(1, activation=tf.sigmoid)
-        else:
-            self.output_gate = None
+        # self.model = None
 
+    def build(self, input_shape):
         tf.logging.warning("trees:decoder:cells:FixedArityNodeDecoder\tnot using hidden_cell_coef")
-        self.model = tf.keras.Sequential([
-            tf.keras.layers.Dense(u, activation=activation)
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(u, activation=self.activation)
             for u in interpolate_layers_size(
-                embedding_size,  # TODO input size is actually bigger, consider it? (value, distribs ?)
-                embedding_size * node_def.arity.value,
-                stacked_layers  # TODO exploit hidden_coef for interpolation fatness
+                input_shape[1].value,
+                self.embedding_size * self.node_def.arity.value,
+                self.stacked_layers  # TODO exploit hidden_coef for interpolation fatness
             )
         ])
 
-    def __call__(self, x, *args, **kwargs):
+        if self.output_gate:
+            self.model = _GatedModel(model=model, embedding_size=self.embedding_size)
+        else:
+            self.model = model
+
+    def call(self, x, *args, **kwargs):
         """
 
         :param x: [batch_size, embedding_size + other_infos_size]
         :return: [batch_size, embedding_size * arity]
         """
-        arity = self.node_def.arity.value
-        batch_size = x.shape[0]
-
-        parent_embs = x[:, :self.embedding_size]
-        output = self.model(x)  # [batch, emb * arity]
-        childrens = tf.reshape(output, [batch_size, arity, -1])
-
-        if self.output_gate is not None:
-            gating_inp = tf.reshape(
-                    tf.concat([childrens,
-                               tf.tile(tf.expand_dims(x, axis=1), [1, arity, 1])], axis=-1),
-                    [batch_size * arity, -1])
-
-            gatings = self.output_gate(gating_inp)
-            corrected = gatings * tf.reshape(childrens, [batch_size * arity, -1]) + \
-                        (1 - gatings) * tf.reshape(
-                                            tf.tile(tf.expand_dims(parent_embs, axis=1), [1, arity, 1]),
-                                            [batch_size * arity, -1])
-        else:
-            corrected = childrens
-
-        return tf.reshape(corrected, [batch_size, arity * self.embedding_size])
+        return self.model(x)
 
 
-class ParallelDense(tf.keras.layers.Layer):
-    """ Build n dense (two layer) parallel (independent) layers """
+class VariableArityNodeDecoder(tf.keras.Model):
+    def __init__(self, *, activation, maximum_children, embedding_size, stacked_layers: int = 2, output_gate=True, **kwargs):
+        super(VariableArityNodeDecoder, self).__init__(**kwargs)
 
-    def __init__(self, activation, hidden_size: int, output_size: int, parallel_clones: int, gated: bool = False, **kwargs):
         self.activation = activation
-        self.hidden_size = hidden_size
-        self.output_size = output_size
-        self.parallel_clones = parallel_clones
-        self.gated = gated
+        self.embedding_size = embedding_size
+        self.stacked_layers = stacked_layers
+        self.maximum_children = maximum_children
 
-        super(ParallelDense, self).__init__(**kwargs)
+        tf.logging.warning("trees:decoder:cells:VariableArityNodeDecoder	not using hidden_cell_coef")
+
+        self.model = None
+        if output_gate:
+            self.output_gate = _GatedModel(embedding_size=self.embedding_size)
 
     def build(self, input_shape):
+        self.model = tf.keras.Sequential([
+            ParallelDense(
+                activation=self.activation,
+                size=s,
+                parallel_clones=self.maximum_children
+            )
+            for s in interpolate_layers_size(
+                input_shape[1].value,
+                self.embedding_size,
+                self.stacked_layers)
+        ])
 
-        self.hidden_kernel = self.add_weight(name='hidden_kernel',
-                                             shape=[self.parallel_clones, input_shape[1].value, self.hidden_size],
-                                             initializer='random_normal',
-                                             trainable=True)
-
-        self.hidden_bias= self.add_weight(name='hidden_bias',
-                                          shape=(self.parallel_clones, 1, self.hidden_size),    # 1 is for broadcasting
-                                          initializer='random_normal',
-                                          trainable=True)
-
-        self.out_kernel = self.add_weight(name='out_kernel',
-                                          shape=(self.parallel_clones, self.hidden_size, self.output_size),
-                                          initializer='random_normal',
-                                          trainable=True)
-
-        self.out_bias= self.add_weight(name='out_bias',
-                                             shape=(self.parallel_clones, 1, self.output_size), # 1 is for broadcasting
-                                             initializer='random_normal',
-                                             trainable=True)
-
-        if self.gated:
-            self.gate_kernel = self.add_weight(name='gate_kernel',
-                                               shape=[ (self.parallel_clones * self.output_size) + input_shape[1].value, self.parallel_clones],
-                                               initializer='random_normal',
-                                               trainable=True)
-
-            self.gate_bias = self.add_weight(name='gate_bias',
-                                             shape=[self.parallel_clones],
-                                             initializer='random_normal',
-                                             trainable=True)
-
-        super(ParallelDense, self).build(input_shape)
-
-    def call(self, x, n:int):
+    def call(self, x, n: int, *args, **kwargs):
         """
 
-        :param x: input [batch, input_size]
-        :param n: compute only the first n clones
-        :return: [clones, batch, output_size]
+        :param x: [batch, input_size]
+        :param n: number of children to decode. It takes the n first children from left.
+        :return: [n, batch, embedding_size]
         """
-        x_ = tf.tile(tf.expand_dims(x, axis=0), [n, 1, 1])    # [clones, batch, input]
-        #  [clones, batch, input] * [clones, input, hidden] = [clones, batch, hidden]
-        hidden_activation = self.activation(tf.matmul(x_, self.hidden_kernel[:n]) + self.hidden_bias[:n])
+        x_ = tf.tile(tf.expand_dims(x, axis=0), [n, 1, 1])  # [clones, batch, input]
+        output = self.model(x_)
 
-        # [clones, batch, hidden] * [clones, hidden, output] = [clones, batch, output]
-        output = self.activation(tf.matmul(hidden_activation, self.out_kernel[:n]) + self.out_bias[:n])
-
-        if self.gated:
-            gate_inp = tf.concat([x, tf.reshape(output, [x.shape[0], -1])], axis=-1)
-            gate = tf.nn.softmax(tf.nn.leaky_relu(tf.matmul(gate_inp, self.gate_kernel[:gate_inp.shape[1], :n]) + self.gate_bias[:n]), axis=-1)
-            gate = tf.reshape(gate, [n, -1, 1])
-            corrected = tf.reshape(x, [1, x.shape[0], -1])[:, :, :self.output_size] * gate + (1-gate) * output
-            return corrected
+        if self.output_gate is not None:
+            output = self.output_gate(tf.reshape(tf.transpose(output, [1, 0, 2]), [x.shape[0], -1]))
+            output = tf.transpose(tf.reshape(output, [x.shape[0], n,  self.embedding_size]), [1, 0, 2])
 
         return output
 
-    def compute_output_shape(self, input_shape):
-        return (input_shape[0], self.output_size)   # TODO this is wrong, can't be used in Sequential composition
+
+class ParallelDense(tf.keras.layers.Layer):
+    """Computes parallely many dense layers with the same shape, or possibly only a prefix of them"""
+    def __init__(self, *, activation, size, parallel_clones, **kwargs):
+        super(ParallelDense, self).__init__(**kwargs)
+        self.activation = activation
+        self.parallel_clones = parallel_clones
+        self.size = size
+
+        self.kernel = None
+        self.bias = None
+
+    def build(self, input_shape):
+        """
+
+        :param input_shape: [n <= parallel_clones, batch, input_size]
+        :return:
+        """
+        super(ParallelDense, self).build(input_shape)
+
+        self.kernel = self.add_weight(name='kernel',
+                                      shape=[self.parallel_clones, input_shape[2].value, self.size],
+                                      initializer='random_normal',
+                                      trainable=True)
+
+        self.bias = self.add_weight(name='bias',
+                                    shape=(self.parallel_clones, 1, self.size),    # 1 is for broadcasting
+                                    initializer='random_normal',
+                                    trainable=True)
+
+    def call(self, x, *args, **kwargs):
+        """
+        Parallely computes the first n parallel dense layers
+        :param x: input [n <= parallel_clones, batch, input_size]
+        :return: [n, batch, output_size]
+                """
+        n = x.shape[0]
+        #  [clones, batch, input] * [clones, input, output] => [clones, batch, output]
+        return self.activation(tf.matmul(x, self.kernel[:n]) + self.bias[:n])
 

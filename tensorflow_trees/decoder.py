@@ -4,7 +4,7 @@ import itertools
 
 from tensorflow_trees.definition import TreeDefinition, Tree, TrainingTree, NodeDefinition
 from tensorflow_trees.batch import BatchOfTreesForDecoding
-from tensorflow_trees.decoder_cells import FixedArityNodeDecoder, ParallelDense
+from tensorflow_trees.decoder_cells import FixedArityNodeDecoder, VariableArityNodeDecoder
 
 
 class DecoderCellsBuilder:
@@ -98,9 +98,12 @@ class DecoderCellsBuilder:
                     tf.keras.layers.Dense(decoder.embedding_size * 2, activation=activation),
                 ], name=name)
             elif type(node_def.arity) == NodeDefinition.VariableArity and decoder.use_flat_strategy:
-                return ParallelDense(activation=activation, hidden_size=decoder.embedding_size,
-                                     output_size=decoder.embedding_size,
-                                     parallel_clones=decoder.cut_arity, gated=gate, name=name), \
+                return VariableArityNodeDecoder(activation=activation,
+                                                maximum_children=decoder.cut_arity,
+                                                embedding_size=decoder.embedding_size,
+                                                stacked_layers=stacked_layers,
+                                                output_gate=gate,
+                                                name=name), \
                        tf.keras.Sequential([
                            tf.keras.layers.Dense(int(decoder.embedding_size * (1+hidden_coef*0.5)), activation=activation),
                            tf.keras.layers.Dense(decoder.embedding_size, activation=activation),
