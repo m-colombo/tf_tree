@@ -109,6 +109,8 @@ class VariableArityNodeDecoder(tf.keras.Model):
         self.model = None
         if output_gate:
             self.output_gate = _GatedModel(embedding_size=self.embedding_size)
+        else:
+                self.output_gate = None
 
     def build(self, input_shape):
         self.model = tf.keras.Sequential([

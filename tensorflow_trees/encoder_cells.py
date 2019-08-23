@@ -3,6 +3,7 @@ import tensorflow as tf
 from tensorflow_trees.definition import NodeDefinition
 from tensorflow_trees.miscellaneas import interpolate_layers_size
 
+
 class _GatedModel(tf.keras.Model):
     def __init__(self, *, model: tf.keras.Model = None, node_def: NodeDefinition = None,
                  embedding_size: int = None, maximum_input_arity: int = None,
