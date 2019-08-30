@@ -6,6 +6,7 @@ from tensorflow_trees.miscellaneas import interpolate_layers_size
 
 
 class _GatedModel(tf.keras.Model):
+    """Forward the parent embedding based on child and parent"""
     def __init__(self, *, embedding_size: int, model=None, **kwargs):
         """
 
@@ -20,37 +21,32 @@ class _GatedModel(tf.keras.Model):
         self.model = model
         self.output_gate = tf.keras.layers.Dense(1, activation=tf.sigmoid)
 
-    def call(self, x, *args, **kwargs):
+    def call(self, x, children=None, *args, **kwargs):
         """
 
         :param x: [batch_size, embedding_size + other_infos_size] if model else [batch_size, embedding_size * number_of_children]
+        :param childrens: [batch_size, arity*embedding_size] required if self.model is None
         :return: [batch_size, embedding_size * arity]
         """
 
-        if self.model is None:
-            outputs = x
-        else:
+        if self.model is not None:
             outputs = self.model(x, *args, **kwargs)
+        else:
+            outputs = children
 
         arity = outputs.shape[1].value // self.embedding_size
         batch_size = x.shape[0].value
 
         parent_embs = x[:, :self.embedding_size]
-        childrens = tf.reshape(outputs, [batch_size, arity, self.embedding_size])
+        childrens = tf.reshape(outputs, [batch_size * arity, self.embedding_size])
 
-        gating_inp = tf.reshape(
-            tf.concat([childrens,
-                       tf.tile(tf.expand_dims(x, axis=1), [1, arity, 1])], axis=-1),
-            [batch_size * arity, -1])
+        gating_inp = tf.concat([childrens, tf.tile(x, [arity, 1])], axis=-1)
 
-        gatings = self.output_gate(gating_inp)
+        gatings = self.output_gate(gating_inp)  # TODO applying the gates to all children alltoghether fails with variable input size
 
         corrected = \
-            gatings * tf.reshape(childrens, [batch_size * arity, -1]) + \
-            (1 - gatings) * \
-                tf.reshape(
-                    tf.tile(tf.expand_dims(parent_embs, axis=1), [1, arity, 1]),
-                    [batch_size * arity, -1])
+            gatings * childrens + \
+            (1 - gatings) * tf.tile(parent_embs, [arity, 1])
 
         return tf.reshape(corrected, [batch_size, arity * self.embedding_size])
 
@@ -110,7 +106,7 @@ class VariableArityNodeDecoder(tf.keras.Model):
         if output_gate:
             self.output_gate = _GatedModel(embedding_size=self.embedding_size)
         else:
-                self.output_gate = None
+            self.output_gate = None
 
     def build(self, input_shape):
         self.model = tf.keras.Sequential([
@@ -136,7 +132,7 @@ class VariableArityNodeDecoder(tf.keras.Model):
         output = self.model(x_)
 
         if self.output_gate is not None:
-            output = self.output_gate(tf.reshape(tf.transpose(output, [1, 0, 2]), [x.shape[0], -1]))
+            output = self.output_gate(x, tf.reshape(tf.transpose(output, [1, 0, 2]), [x.shape[0], -1]))
             output = tf.transpose(tf.reshape(output, [x.shape[0], n,  self.embedding_size]), [1, 0, 2])
 
         return output
