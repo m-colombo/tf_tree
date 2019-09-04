@@ -183,7 +183,7 @@ class BatchOfTreesForDecoding(BatchOfTrees):
 
         return list(map(lambda l: value_t.representation_to_abstract_batch(l), leaves[:4]))
 
-    def reconstruction_loss(self, ignore_values={}, summaries=False):
+    def reconstruction_loss(self, ignore_values={}, summaries=False, weight_values={}):
 
         value_gt = {nt.id: [] for nt in self.tree_def.node_types if nt.value_type is not None}
         value = {nt.id: [] for nt in self.tree_def.node_types if nt.value_type is not None}
@@ -218,8 +218,10 @@ class BatchOfTreesForDecoding(BatchOfTrees):
                     vk_loss = tf.reduce_mean(tf.square(all_value_gen - all_value_gt), axis=-1)
 
                 reduced = tf.reduce_mean(vk_loss, axis=-1)
+                rescaled = reduced * weight_values[k] if k in weight_values else 1.0
                 tfs.scalar("loss/tr/values/"+k, reduced)
-                v_loss += reduced   # TODO handle the mixing of losses from different domain (i.e. properly weight them)
+                tfs.scalar("loss/tr/values/rescaled_" + k, rescaled)
+                v_loss += rescaled   # TODO handle the mixing of losses from different domain (i.e. properly weight them)
 
         return d_loss, v_loss
 

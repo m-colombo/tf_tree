@@ -42,7 +42,7 @@ class _GatedModel(tf.keras.Model):
 
         gating_inp = tf.concat([childrens, tf.tile(x, [arity, 1])], axis=-1)
 
-        gatings = self.output_gate(gating_inp)  # TODO applying the gates to all children alltoghether fails with variable input size
+        gatings = self.output_gate(gating_inp)
 
         corrected = \
             gatings * childrens + \
